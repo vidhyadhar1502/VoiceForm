@@ -10,6 +10,7 @@ from backend.app.services.stale_result_guard import StaleResultGuard
 from backend.app.services.task_manager import TaskManager
 from backend.app.services.validation_service import ValidationService
 from backend.app.services.stress_test_service import StressTestService
+from backend.app.services.conversation_service import ConversationService
 from backend.app.websocket.connection_manager import ConnectionManager
 
 class StressTestRequest(BaseModel):
@@ -18,6 +19,9 @@ class StressTestRequest(BaseModel):
     new_postal_code: str = "600028"
     validation_delay_seconds: float = 3.0
     interrupt_after_seconds: float = 1.0
+
+class ConversationInputRequest(BaseModel):
+    text: str
 
 class UpdateFieldRequest(BaseModel):
     field_name: str
@@ -34,6 +38,7 @@ def create_api_router(
     form_state_manager: FormStateManager,
     validation_service: ValidationService,
     stress_test_service: StressTestService,
+    conversation_service: ConversationService,
     ws_manager: ConnectionManager
 ) -> APIRouter:
     router = APIRouter()
@@ -45,6 +50,47 @@ def create_api_router(
             "service": "VoiceForm Backend",
             "active_version": version_manager.active_version,
             "stale_blocks_count": stale_guard.stale_blocks_count
+        }
+
+    @router.post("/conversation/input")
+    async def process_conversation_input(req: ConversationInputRequest):
+        """
+        Processes natural language instructions through Gemini AI interpretation,
+        ActionValidator schema verification, version-fencing, and authoritative FormState updates.
+        """
+        try:
+            result = await conversation_service.process_user_input(req.text)
+            return result
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.get("/conversation/history")
+    async def get_conversation_history():
+        """Returns the conversation message history with interaction versions and structured actions."""
+        return {
+            "messages": conversation_service.get_history(),
+            "active_version": version_manager.active_version
+        }
+
+    @router.post("/conversation/reset")
+    async def reset_conversation():
+        """Clears conversation history and resets form state."""
+        conversation_service.reset()
+        form_state_manager.reset()
+        version_manager.reset(initial_version=10)
+        stale_guard.reset()
+        task_manager.reset()
+        stress_test_service.event_timeline.clear()
+        
+        await ws_manager.broadcast({
+            "event": "conversation_reset",
+            "active_version": version_manager.active_version,
+            "form_state": form_state_manager.get_state().model_dump()
+        })
+        return {
+            "status": "reset_success",
+            "active_version": version_manager.active_version,
+            "form_state": form_state_manager.get_state().model_dump()
         }
 
     @router.post("/demo/stress-test")
@@ -85,6 +131,7 @@ def create_api_router(
         """Resets all system state, versions, and timelines cleanly."""
         init_ver = req.initial_version if req else 10
         stress_test_service.reset_session(initial_version=init_ver)
+        conversation_service.reset()
         await ws_manager.broadcast({
             "event": "session_reset",
             "active_version": version_manager.active_version,

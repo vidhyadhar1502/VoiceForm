@@ -10,6 +10,9 @@ from backend.app.services.stale_result_guard import StaleResultGuard
 from backend.app.services.form_state_manager import FormStateManager
 from backend.app.services.validation_service import ValidationService
 from backend.app.services.stress_test_service import StressTestService
+from backend.app.services.ai_service import AIService
+from backend.app.services.action_validator import ActionValidator
+from backend.app.services.conversation_service import ConversationService
 from backend.app.websocket.connection_manager import ConnectionManager
 from backend.app.api.routes import create_api_router
 
@@ -21,6 +24,10 @@ form_state_manager = FormStateManager(stale_guard=stale_guard)
 validation_service = ValidationService(default_delay=settings.DEFAULT_ARTIFICIAL_DELAY_SECONDS)
 ws_manager = ConnectionManager()
 
+# AI & Conversation services
+ai_service = AIService(task_manager=task_manager)
+action_validator = ActionValidator()
+
 # Stress Test Service Singleton
 stress_test_service = StressTestService(
     version_manager=version_manager,
@@ -29,6 +36,18 @@ stress_test_service = StressTestService(
     form_state_manager=form_state_manager,
     validation_service=validation_service,
     broadcast_fn=ws_manager.broadcast
+)
+
+conversation_service = ConversationService(
+    version_manager=version_manager,
+    form_state_manager=form_state_manager,
+    task_manager=task_manager,
+    stale_guard=stale_guard,
+    validation_service=validation_service,
+    ai_service=ai_service,
+    action_validator=action_validator,
+    broadcast_fn=ws_manager.broadcast,
+    timeline_ref=stress_test_service.event_timeline
 )
 
 # Wire invalidation listener: When new version is created, cancel tasks for old version
@@ -76,6 +95,7 @@ api_router = create_api_router(
     form_state_manager=form_state_manager,
     validation_service=validation_service,
     stress_test_service=stress_test_service,
+    conversation_service=conversation_service,
     ws_manager=ws_manager
 )
 app.include_router(api_router, prefix=settings.API_PREFIX)

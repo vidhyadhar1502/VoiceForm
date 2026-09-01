@@ -76,6 +76,26 @@ export interface TimelineEvent {
   details?: Record<string, any>;
 }
 
+export interface StructuredAction {
+  action: string;
+  target_field?: string;
+  value?: string;
+  requires_validation: boolean;
+  response_text: string;
+  is_valid: boolean;
+  validation_error?: string;
+}
+
+export interface ConversationMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+  interaction_version: number;
+  active_version: number;
+  structured_action?: StructuredAction;
+  timestamp: string;
+}
+
 export interface StressTestResponse {
   test_run_id: string;
   mode: string;

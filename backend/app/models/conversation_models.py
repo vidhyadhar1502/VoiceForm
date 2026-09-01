@@ -5,19 +5,39 @@ from datetime import datetime
 
 class UserIntent(str, Enum):
     UPDATE_FIELD = "UPDATE_FIELD"
+    CORRECT_FIELD = "CORRECT_FIELD"
     SKIP_FIELD = "SKIP_FIELD"
     NAVIGATE_FIELD = "NAVIGATE_FIELD"
-    CORRECT_FIELD = "CORRECT_FIELD"
     REQUEST_CLARIFICATION = "REQUEST_CLARIFICATION"
+    GET_FORM_SUMMARY = "GET_FORM_SUMMARY"
     STOP = "STOP"
     CONFIRM = "CONFIRM"
 
 class StructuredAction(BaseModel):
-    intent: UserIntent
+    action: UserIntent = Field(default=UserIntent.UPDATE_FIELD)
+    intent: Optional[UserIntent] = None
     target_field: Optional[str] = None
     value: Optional[str] = None
     requires_validation: bool = False
-    response_text: str
+    response_text: str = ""
+    is_valid: bool = True
+    validation_error: Optional[str] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.intent is None:
+            self.intent = self.action
+        elif self.action is None:
+            self.action = self.intent
+
+class ConversationMessage(BaseModel):
+    id: str
+    role: str  # "user" | "assistant" | "system"
+    text: str
+    interaction_version: int
+    active_version: int
+    structured_action: Optional[StructuredAction] = None
+    is_stale: bool = False
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
 
 class EventLog(BaseModel):
     id: str
