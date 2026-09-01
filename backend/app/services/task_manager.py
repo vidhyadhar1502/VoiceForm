@@ -105,3 +105,11 @@ class TaskManager:
 
     def get_stale_blocked_tasks_count(self) -> int:
         return sum(1 for t in self._tasks.values() if t.status == TaskStatus.STALE_BLOCKED)
+
+    def reset(self) -> None:
+        """Clear all registered tasks and handles for a clean test run."""
+        for handle in self._asyncio_handles.values():
+            if not handle.done():
+                handle.cancel()
+        self._tasks.clear()
+        self._asyncio_handles.clear()

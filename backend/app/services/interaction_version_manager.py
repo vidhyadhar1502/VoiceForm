@@ -62,3 +62,14 @@ class InteractionVersionManager:
 
     def get_history(self) -> List[Dict[str, Any]]:
         return list(self._version_history)
+
+    def reset(self, initial_version: int = 10) -> None:
+        """Resets the version counter and history for a new session."""
+        self._active_version = initial_version
+        self._version_history = [
+            {
+                "version": initial_version,
+                "created_at": datetime.utcnow().isoformat(),
+                "reason": "Session Reset"
+            }
+        ]

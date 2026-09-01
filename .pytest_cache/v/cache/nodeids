@@ -7,6 +7,13 @@
   "backend/tests/test_interruptions.py::test_uncancellable_task_fencing",
   "backend/tests/test_stale_results.py::test_fresh_result_accepted",
   "backend/tests/test_stale_results.py::test_stale_result_rejected",
+  "backend/tests/test_stress_test.py::test_event_timeline_contains_stale_result_blocked_in_uncancellable_mode",
+  "backend/tests/test_stress_test.py::test_final_form_state_contains_newest_valid_postal_code",
+  "backend/tests/test_stress_test.py::test_full_cancellable_stress_test_flow",
+  "backend/tests/test_stress_test.py::test_full_uncancellable_stress_test_flow",
+  "backend/tests/test_stress_test.py::test_metrics_correctly_count_stale_results",
+  "backend/tests/test_stress_test.py::test_multiple_consecutive_runs_do_not_leak_state",
+  "backend/tests/test_stress_test.py::test_old_postal_code_cannot_overwrite_new_value",
   "backend/tests/test_versioning.py::test_initial_version",
   "backend/tests/test_versioning.py::test_invalidation_listener",
   "backend/tests/test_versioning.py::test_monotonic_version_increment"

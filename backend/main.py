@@ -1,7 +1,7 @@
 import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 
 from backend.app.core.config import settings
 from backend.app.services.interaction_version_manager import InteractionVersionManager
@@ -9,8 +9,9 @@ from backend.app.services.task_manager import TaskManager
 from backend.app.services.stale_result_guard import StaleResultGuard
 from backend.app.services.form_state_manager import FormStateManager
 from backend.app.services.validation_service import ValidationService
+from backend.app.services.stress_test_service import StressTestService
 from backend.app.websocket.connection_manager import ConnectionManager
-from backend.app.api.routes import api_router
+from backend.app.api.routes import create_api_router
 
 # Core system singletons
 version_manager = InteractionVersionManager(initial_version=settings.DEFAULT_INITIAL_VERSION)
@@ -20,14 +21,23 @@ form_state_manager = FormStateManager(stale_guard=stale_guard)
 validation_service = ValidationService(default_delay=settings.DEFAULT_ARTIFICIAL_DELAY_SECONDS)
 ws_manager = ConnectionManager()
 
+# Stress Test Service Singleton
+stress_test_service = StressTestService(
+    version_manager=version_manager,
+    task_manager=task_manager,
+    stale_guard=stale_guard,
+    form_state_manager=form_state_manager,
+    validation_service=validation_service,
+    broadcast_fn=ws_manager.broadcast
+)
+
 # Wire invalidation listener: When new version is created, cancel tasks for old version
 def _on_version_invalidated(old_version: int, new_version: int):
     asyncio.create_task(task_manager.cancel_tasks_for_version(old_version))
     asyncio.create_task(ws_manager.broadcast({
         "event": "interaction_invalidated",
         "invalidated_version": old_version,
-        "active_version": new_version,
-        "timestamp": ""
+        "active_version": new_version
     }))
 
 version_manager.add_invalidation_listener(_on_version_invalidated)
@@ -58,6 +68,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount API router with injected services
+api_router = create_api_router(
+    version_manager=version_manager,
+    task_manager=task_manager,
+    stale_guard=stale_guard,
+    form_state_manager=form_state_manager,
+    validation_service=validation_service,
+    stress_test_service=stress_test_service,
+    ws_manager=ws_manager
+)
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
 @app.websocket("/ws")
@@ -69,12 +89,13 @@ async def websocket_endpoint(websocket: WebSocket):
         "active_version": version_manager.active_version,
         "form_state": form_state_manager.get_state().model_dump(),
         "tasks": [t.model_dump() for t in task_manager.get_all_tasks()],
-        "stale_blocks_count": stale_guard.stale_blocks_count
+        "stale_blocks_count": stale_guard.stale_blocks_count,
+        "timeline": stress_test_service.event_timeline
     }
     await websocket.send_json(initial_snapshot)
     try:
         while True:
             data = await websocket.receive_text()
-            # Handle incoming client messages if any
+            # Can receive ping/pong or client messages
     except WebSocketDisconnect:
         await ws_manager.disconnect(websocket)

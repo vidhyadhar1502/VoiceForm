@@ -27,86 +27,73 @@ export type TaskStatus =
   | 'STALE_BLOCKED'
   | 'FAILED';
 
-export type VoiceState =
-  | 'IDLE'
-  | 'LISTENING'
-  | 'PROCESSING'
-  | 'ASSISTANT_SPEAKING'
-  | 'INTERRUPTED';
-
 export interface FormFieldValue {
   name: string;
   label: string;
   value: string;
   status: FieldStatus;
-  validationStatus: ValidationStatus;
-  updatedAt: string;
-  interactionVersion: number;
-  errorMessage?: string;
-  validationDetails?: {
+  validation_status: ValidationStatus;
+  updated_at: string;
+  interaction_version: number;
+  error_message?: string;
+  validation_details?: {
     city?: string;
     state?: string;
     message?: string;
+    [key: string]: any;
   };
 }
 
 export interface FormState {
-  fields: {
-    fullName: FormFieldValue;
-    dateOfBirth: FormFieldValue;
-    phoneNumber: FormFieldValue;
-    email: FormFieldValue;
-    address: FormFieldValue;
-    city: FormFieldValue;
-    state: FormFieldValue;
-    postalCode: FormFieldValue;
-    occupation: FormFieldValue;
-    employmentStatus: FormFieldValue;
-  };
-  activeFieldKey: string;
-  lastUpdatedVersion: number;
+  fields: Record<string, FormFieldValue>;
+  active_field_key?: string;
+  last_updated_version: number;
 }
 
-export interface AsyncTaskRecord {
-  taskId: string;
+export interface TaskRecord {
+  task_id: string;
   name: string;
-  targetField?: string;
+  target_field?: string;
   version: number;
   status: TaskStatus;
-  createdAt: string;
-  completedAt?: string;
-  cancelledAt?: string;
+  created_at: string;
+  completed_at?: string;
+  cancelled_at?: string;
   payload?: any;
   result?: any;
+  uncancellable?: boolean;
 }
 
-export interface SystemEventLog {
-  id: string;
+export interface TimelineEvent {
+  event_id: string;
   timestamp: string;
-  eventType: string;
-  interactionVersion: number;
-  activeVersion: number;
+  event_type: string;
+  interaction_version: number;
+  active_version: number;
+  task_id?: string;
   message: string;
+  is_stale_blocked?: boolean;
   details?: Record<string, any>;
-  isStaleBlocked?: boolean;
 }
 
-export interface SystemMetrics {
-  interruptionsCount: number;
-  activeTasksCount: number;
-  cancelledTasksCount: number;
-  staleResultsBlockedCount: number;
-  versionsCreatedCount: number;
-  interruptionToAudioStopTimeMs?: number;
+export interface StressTestResponse {
+  test_run_id: string;
+  mode: string;
+  final_interaction_version: number;
+  final_form_state: FormState;
+  stale_results_blocked: number;
+  cancelled_tasks_count: number;
+  event_timeline: TimelineEvent[];
+  test_success: boolean;
+  summary: string;
 }
 
-export interface InteractionState {
-  activeInteractionVersion: number;
-  voiceState: VoiceState;
-  currentTranscript: string;
-  currentAssistantResponse: string;
-  speechProvider: 'Rime' | 'WebAudio' | 'Simulated';
-  speechProviderStatus: 'Active' | 'Inactive' | 'Error';
-  artificialToolDelaySeconds: number;
-  demoModeEnabled: boolean;
+export interface SystemSnapshot {
+  active_version: number;
+  form_state: FormState;
+  tasks: TaskRecord[];
+  stale_results_blocked: number;
+  cancelled_tasks_count: number;
+  active_tasks_count: number;
+  timeline: TimelineEvent[];
 }

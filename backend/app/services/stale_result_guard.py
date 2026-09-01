@@ -106,3 +106,8 @@ class StaleResultGuard:
 
     def get_blocked_events(self) -> List[Dict[str, Any]]:
         return list(self._blocked_events)
+
+    def reset(self) -> None:
+        """Resets stale blocks counter and blocked event logs."""
+        self._stale_blocks_count = 0
+        self._blocked_events.clear()
