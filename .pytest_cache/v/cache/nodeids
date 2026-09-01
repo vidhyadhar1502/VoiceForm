@@ -1,0 +1,13 @@
+[
+  "backend/tests/test_form_state.py::test_normal_field_update",
+  "backend/tests/test_form_state.py::test_stale_validation_result_cannot_overwrite_newer_value",
+  "backend/tests/test_form_state.py::test_user_correction_replaces_previous_value",
+  "backend/tests/test_interruptions.py::test_multiple_rapid_interruptions",
+  "backend/tests/test_interruptions.py::test_task_cancellation_on_interruption",
+  "backend/tests/test_interruptions.py::test_uncancellable_task_fencing",
+  "backend/tests/test_stale_results.py::test_fresh_result_accepted",
+  "backend/tests/test_stale_results.py::test_stale_result_rejected",
+  "backend/tests/test_versioning.py::test_initial_version",
+  "backend/tests/test_versioning.py::test_invalidation_listener",
+  "backend/tests/test_versioning.py::test_monotonic_version_increment"
+]

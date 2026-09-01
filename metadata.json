@@ -1,0 +1,6 @@
+{
+  "name": "VoiceForm",
+  "description": "An interruption-safe, voice-native interface for complex forms.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
