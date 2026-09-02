@@ -7,6 +7,7 @@ import { EventTimeline } from './components/EventTimeline';
 import { TaskRegistryViewer } from './components/TaskRegistryViewer';
 import { ConversationPanel } from './components/ConversationPanel';
 import { SpeechStatusPanel } from './components/SpeechStatusPanel';
+import { VoiceInteractionPanel } from './components/VoiceInteractionPanel';
 import {
   FormState,
   TaskRecord,
@@ -17,9 +18,11 @@ import {
   SpeechProviderInfo,
   SpeechMetrics,
   AudioQueueItem,
+  VoiceState,
 } from './types';
 import { audioPlaybackManager } from './services/audioPlaybackManager';
-import { Sparkles, Activity, Volume2 } from 'lucide-react';
+import { voiceInteractionManager } from './services/voiceInteractionManager';
+import { Sparkles, Activity, Volume2, Mic } from 'lucide-react';
 
 export const App: React.FC = () => {
   // State
@@ -37,6 +40,7 @@ export const App: React.FC = () => {
   const [isWsConnected, setIsWsConnected] = useState<boolean>(false);
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [isProcessingAi, setIsProcessingAi] = useState<boolean>(false);
+  const [isTestingVoice, setIsTestingVoice] = useState<boolean>(false);
   const [testSuccess, setTestSuccess] = useState<boolean | null>(null);
 
   // Speech & Audio state
@@ -60,6 +64,9 @@ export const App: React.FC = () => {
     audio_interruptions: 0,
     audio_stop_requests: 0,
   });
+
+  // Voice Interaction state
+  const [voiceState, setVoiceState] = useState<VoiceState>(voiceInteractionManager.getState());
 
   // Active View Mode
   const [activeTab, setActiveTab] = useState<'conversation' | 'stresstest'>('conversation');
@@ -132,7 +139,7 @@ export const App: React.FC = () => {
     }
   }, [fetchSpeechStatus]);
 
-  // Audio Playback Manager Subscriptions
+  // Audio Playback & Voice Interaction Manager Subscriptions
   useEffect(() => {
     // Set callback to report playback events to backend
     audioPlaybackManager.setPlaybackEventCallback(async (eventType, version, taskId, details) => {
@@ -153,21 +160,47 @@ export const App: React.FC = () => {
       }
     });
 
-    const unsubscribe = audioPlaybackManager.subscribe((state) => {
+    const unsubscribeAudio = audioPlaybackManager.subscribe((state) => {
       setSpeechStatus(state.status);
       setCurrentPlayingVersion(state.currentPlayingVersion);
       if (state.lastBlockedVersion !== null) {
         setLastBlockedAudioVersion(state.lastBlockedVersion);
+        voiceInteractionManager.recordStaleBlockedAfterVoice();
       }
       if (state.interruptionLatencyMs !== null) {
         setInterruptionLatencyMs(state.interruptionLatencyMs);
       }
     });
 
+    const unsubscribeVoice = voiceInteractionManager.subscribe((state) => {
+      setVoiceState(state);
+    });
+
+    // Wire voice manager submission to conversation handler
+    voiceInteractionManager.setSubmitCallback(async (text, source) => {
+      await handleSendMessage(text, source);
+    });
+
+    voiceInteractionManager.setTimelineEventCallback((evt) => {
+      setTimeline((prev) => [
+        ...prev,
+        {
+          event_id: `evt-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          event_type: evt.event_type || 'VOICE_EVENT',
+          interaction_version: evt.interaction_version ?? activeVersion,
+          active_version: evt.active_version ?? activeVersion,
+          timestamp: new Date().toISOString(),
+          message: evt.message || '',
+          details: evt.details || {},
+        } as TimelineEvent,
+      ]);
+    });
+
     return () => {
-      unsubscribe();
+      unsubscribeAudio();
+      unsubscribeVoice();
     };
-  }, [fetchSpeechStatus]);
+  }, [fetchSpeechStatus, activeVersion]);
 
   // WebSocket Connection
   useEffect(() => {
@@ -235,6 +268,7 @@ export const App: React.FC = () => {
           } else if (data.event === 'session_reset' || data.event === 'conversation_reset') {
             setActiveVersion(data.active_version);
             audioPlaybackManager.reset(data.active_version);
+            voiceInteractionManager.reset(data.active_version);
             setFormState(data.form_state);
             setTasks([]);
             setTimeline([]);
@@ -270,14 +304,14 @@ export const App: React.FC = () => {
     };
   }, [fetchStateSnapshot, fetchSpeechStatus]);
 
-  // Send Conversation Message
-  const handleSendMessage = async (text: string) => {
+  // Send Conversation Message (supports text and voice input_source)
+  const handleSendMessage = async (text: string, source: string = 'text') => {
     setIsProcessingAi(true);
     try {
       const response = await fetch('/api/conversation/input', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, input_source: source }),
       });
 
       if (response.ok) {
@@ -323,11 +357,48 @@ export const App: React.FC = () => {
     }
   };
 
+  // Trigger Deterministic Voice Interruption Demo Scenario (v80 -> v81)
+  const handleRunVoiceBargeInTest = async () => {
+    setIsTestingVoice(true);
+    try {
+      const res = await fetch('/api/demo/voice-interruption-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          initial_phrase: 'My postal code is 600001',
+          interrupt_phrase: 'Actually change it to 600028',
+          tts_delay_seconds: 1.5,
+          interrupt_delay_seconds: 0.2,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.active_version) {
+          setActiveVersion(data.active_version);
+          audioPlaybackManager.setActiveVersion(data.active_version);
+        }
+        if (data.final_form_state) {
+          setFormState(data.final_form_state);
+        }
+        if (data.stale_audio_blocked !== undefined) {
+          setStaleBlocksCount((prev) => prev + (data.stale_audio_blocked ? 1 : 0));
+        }
+      }
+    } catch (err) {
+      console.error("Voice barge-in test failed:", err);
+    } finally {
+      setIsTestingVoice(false);
+      fetchStateSnapshot();
+    }
+  };
+
   // Reset Conversation and Form
   const handleResetConversation = async () => {
     try {
       await fetch('/api/conversation/reset', { method: 'POST' });
       audioPlaybackManager.reset(10);
+      voiceInteractionManager.reset(10);
       setMessages([]);
       setTimeline([]);
       setTestSuccess(null);
@@ -457,6 +528,7 @@ export const App: React.FC = () => {
         body: JSON.stringify({ initial_version: 10 }),
       });
       audioPlaybackManager.reset(10);
+      voiceInteractionManager.reset(10);
       fetchStateSnapshot();
       setTimeline([]);
       setTestSuccess(null);
@@ -471,7 +543,7 @@ export const App: React.FC = () => {
       <Header
         activeVersion={activeVersion}
         isWsConnected={isWsConnected}
-        isRunning={isRunning || isProcessingAi}
+        isRunning={isRunning || isProcessingAi || isTestingVoice}
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
@@ -483,6 +555,23 @@ export const App: React.FC = () => {
           activeTasksCount={activeTasksCount}
           testSuccess={testSuccess}
           mode={mode}
+        />
+
+        {/* Phase 5 Voice Interaction & Barge-In Panel */}
+        <VoiceInteractionPanel
+          voiceState={voiceState}
+          audioStatus={speechStatus}
+          activeVersion={activeVersion}
+          onStartListening={() => voiceInteractionManager.startVoiceInteraction()}
+          onStopListening={() => voiceInteractionManager.stopListening()}
+          onCancelListening={() => voiceInteractionManager.cancelInteraction()}
+          onSwitchProvider={(type) => voiceInteractionManager.switchProvider(type)}
+          onRunVoiceBargeInTest={handleRunVoiceBargeInTest}
+          onConfigureMock={(cfg) => {
+            const mock = voiceInteractionManager.getMockProvider();
+            mock.configure(cfg);
+          }}
+          isTestingVoice={isTestingVoice}
         />
 
         {/* Speech Status Panel (Phase 4 Authority) */}
@@ -531,12 +620,12 @@ export const App: React.FC = () => {
 
           <div className="text-xs text-slate-500 hidden sm:block">
             {activeTab === 'conversation'
-              ? 'Real-time Gemini action interpreter with Rime TTS & interaction-version safety fencing'
+              ? 'Real-time Gemini action interpreter with Rime TTS, speech recognition & full-duplex barge-in'
               : 'Deterministic 5s delay race condition with configurable cancellation vs. fencing'}
           </div>
         </div>
 
-        {/* Tab 1: AI Natural Language Flow */}
+        {/* Tab 1: AI Natural Language & Voice Flow */}
         {activeTab === 'conversation' && (
           <div className="space-y-6">
             <ConversationPanel
@@ -546,6 +635,14 @@ export const App: React.FC = () => {
               onSendMessage={handleSendMessage}
               onTriggerInterruptionDemo={handleTriggerInterruptionDemo}
               onResetConversation={handleResetConversation}
+              isListening={voiceState.micStatus === 'LISTENING'}
+              onToggleVoiceInput={() => {
+                if (voiceState.micStatus === 'LISTENING') {
+                  voiceInteractionManager.stopListening();
+                } else {
+                  voiceInteractionManager.startVoiceInteraction();
+                }
+              }}
             />
 
             {/* Split View: Live Form State & Live Event Timeline */}

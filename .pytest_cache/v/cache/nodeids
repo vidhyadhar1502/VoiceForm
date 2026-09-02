@@ -39,5 +39,19 @@
   "backend/tests/test_stress_test.py::test_old_postal_code_cannot_overwrite_new_value",
   "backend/tests/test_versioning.py::test_initial_version",
   "backend/tests/test_versioning.py::test_invalidation_listener",
-  "backend/tests/test_versioning.py::test_monotonic_version_increment"
+  "backend/tests/test_versioning.py::test_monotonic_version_increment",
+  "backend/tests/test_voice_pipeline.py::test_req10_multiple_rapid_voice_interactions_newest_wins",
+  "backend/tests/test_voice_pipeline.py::test_req11_permission_denied_does_not_corrupt_form_state",
+  "backend/tests/test_voice_pipeline.py::test_req12_speech_recognition_failure_does_not_corrupt_form_state",
+  "backend/tests/test_voice_pipeline.py::test_req13_mock_recognition_interim_to_final_flow",
+  "backend/tests/test_voice_pipeline.py::test_req14_deterministic_voice_barge_in_v80_to_v81_scenario",
+  "backend/tests/test_voice_pipeline.py::test_req1_voice_transcript_enters_same_pipeline_as_text",
+  "backend/tests/test_voice_pipeline.py::test_req2_voice_input_creates_interaction_version",
+  "backend/tests/test_voice_pipeline.py::test_req3_voice_interruption_advances_version_and_invalidates_prior_audio",
+  "backend/tests/test_voice_pipeline.py::test_req4_voice_interruption_clears_obsolete_queue",
+  "backend/tests/test_voice_pipeline.py::test_req5_old_tasks_cancelled_on_voice_interruption",
+  "backend/tests/test_voice_pipeline.py::test_req6_old_ai_results_blocked_after_voice_interruption",
+  "backend/tests/test_voice_pipeline.py::test_req7_old_validation_results_cannot_overwrite_newer_voice_input",
+  "backend/tests/test_voice_pipeline.py::test_req8_old_tts_results_cannot_play_after_newer_voice_interaction",
+  "backend/tests/test_voice_pipeline.py::test_req9_final_voice_transcript_updates_correct_field"
 ]

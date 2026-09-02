@@ -24,6 +24,16 @@ class StressTestRequest(BaseModel):
 
 class ConversationInputRequest(BaseModel):
     text: str
+    input_source: Optional[str] = "text"
+    interaction_version: Optional[int] = None
+
+class ConversationInterruptRequest(BaseModel):
+    reason: Optional[str] = "User voice barge-in"
+
+class VoiceInterruptionDemoRequest(BaseModel):
+    initial_version: int = 80
+    first_voice_input: str = "My postal code is 600001"
+    second_voice_input: str = "Actually change it to 600028"
 
 class UpdateFieldRequest(BaseModel):
     field_name: str
@@ -79,12 +89,52 @@ def create_api_router(
         """
         Processes natural language instructions through Gemini AI interpretation,
         ActionValidator schema verification, version-fencing, and authoritative FormState updates.
+        Supports both text and voice input sources.
         """
         try:
-            result = await conversation_service.process_user_input(req.text)
+            result = await conversation_service.process_user_input(
+                text=req.text,
+                input_source=req.input_source or "text",
+                interaction_version=req.interaction_version
+            )
             return result
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post("/conversation/interrupt")
+    async def handle_conversation_interrupt(req: Optional[ConversationInterruptRequest] = None):
+        """
+        Handles real-time voice barge-in / interruption:
+        1. Advances interaction version monotonically.
+        2. Cancels pending async tasks for previous version.
+        3. Emits USER_INTERRUPTION_DETECTED and AUDIO_INTERRUPTED_FOR_USER_INPUT.
+        """
+        reason_text = req.reason if req and req.reason else "User voice barge-in"
+        old_version = version_manager.active_version
+        new_version = await version_manager.create_new_version(reason=reason_text)
+
+        # Emit voice interruption events
+        await conversation_service._emit_event(
+            event_type="USER_INTERRUPTION_DETECTED",
+            interaction_version=new_version,
+            active_version=new_version,
+            message=f"User voice interruption detected: superseding v{old_version} with v{new_version}",
+            details={"previous_version": old_version, "new_version": new_version}
+        )
+        await conversation_service._emit_event(
+            event_type="AUDIO_INTERRUPTED_FOR_USER_INPUT",
+            interaction_version=old_version,
+            active_version=new_version,
+            message=f"Audio for v{old_version} interrupted and invalidated by user speech",
+            details={"invalidated_version": old_version, "active_version": new_version}
+        )
+
+        return {
+            "status": "interrupted",
+            "previous_version": old_version,
+            "new_version": new_version,
+            "active_version": version_manager.active_version
+        }
 
     @router.get("/conversation/history")
     async def get_conversation_history():
@@ -330,6 +380,115 @@ def create_api_router(
                 }
             else:
                 raise HTTPException(status_code=400, detail=f"Unknown scenario {req.scenario}")
+        finally:
+            speech_service.set_provider(original_provider)
+
+    @router.post("/demo/voice-interruption-test")
+    async def run_voice_interruption_test(req: Optional[VoiceInterruptionDemoRequest] = None):
+        """
+        Executes a deterministic end-to-end voice barge-in test scenario:
+        - Version 80: Voice input: 'My postal code is 600001.'
+        - Processing begins, assistant response is generated, v80 audio begins.
+        - User voice barge-in interrupts v80 before playback finishes.
+        - Version 81 is created. v80 audio is immediately stopped and invalidated.
+        - User transcript for Version 81: 'Actually change it to 600028.'
+        - Version 81 applies action, starts validation, generates fresh audio.
+        - Final form state: postal_code = 600028.
+        """
+        import asyncio
+        init_ver = req.initial_version if req else 80
+        first_input = req.first_voice_input if req else "My postal code is 600001"
+        second_input = req.second_voice_input if req else "Actually change it to 600028"
+
+        original_provider = speech_service.provider
+        try:
+            # 1. Reset cleanly to initial version (v80)
+            stress_test_service.reset_session(initial_version=init_ver)
+            conversation_service.reset()
+            mock_tts = MockSpeechProvider(artificial_delay=0.6)
+            speech_service.set_provider(mock_tts)
+
+            # 2. Voice input for v80 arrives
+            # Pre-set version_manager to init_ver - 1 so create_new_version creates init_ver
+            version_manager.reset(initial_version=init_ver - 1)
+            v80_input_res = await conversation_service.process_user_input(
+                text=first_input,
+                input_source="voice"
+            )
+            v80_version = v80_input_res.get("interaction_version", init_ver)
+
+            # 3. Simulate v80 speech synthesis in background (with delay)
+            v80_tts_task = asyncio.create_task(
+                speech_service.synthesize_response(
+                    text=f"Updating your postal code to {first_input[-6:]}.",
+                    interaction_version=v80_version,
+                    uncancellable=True
+                )
+            )
+
+            # 4. User interrupts while v80 is running
+            await asyncio.sleep(0.1)
+            v81_version = await version_manager.create_new_version(
+                reason=f"User voice barge-in: '{second_input}'"
+            )
+
+            # Emit interruption events
+            await conversation_service._emit_event(
+                event_type="USER_INTERRUPTION_DETECTED",
+                interaction_version=v81_version,
+                active_version=v81_version,
+                message=f"User voice barge-in detected during v{v80_version} response",
+                details={"previous_version": v80_version, "new_version": v81_version}
+            )
+            await conversation_service._emit_event(
+                event_type="AUDIO_INTERRUPTED_FOR_USER_INPUT",
+                interaction_version=v80_version,
+                active_version=v81_version,
+                message=f"Audio for v{v80_version} interrupted and invalidated by user speech",
+                details={"invalidated_version": v80_version, "active_version": v81_version}
+            )
+
+            # 5. User speaks Version 81 transcript
+            v81_input_res = await conversation_service.process_user_input(
+                text=second_input,
+                input_source="voice",
+                interaction_version=v81_version
+            )
+
+            # 6. Await slow v80 TTS task to verify it gets blocked by version fence
+            v80_tts_res = await v80_tts_task
+
+            # 7. Generate v81 speech synthesis
+            v81_tts_res = await speech_service.synthesize_response(
+                text="Updated postal code to 600028.",
+                interaction_version=v81_version
+            )
+
+            # 8. Check final authoritative form state
+            final_form = form_state_manager.get_state().model_dump()
+            final_postal = final_form["fields"]["postal_code"]["value"]
+
+            success = (
+                final_postal == "600028"
+                and v80_tts_res.get("is_stale", False) is True
+                and v81_tts_res.get("success", False) is True
+                and v81_tts_res.get("is_stale", False) is False
+            )
+
+            return {
+                "test_name": "VOICE_BARGE_IN_DETERMINISTIC_TEST",
+                "success": success,
+                "initial_version": v80_version,
+                "interrupted_version": v80_version,
+                "active_version": version_manager.active_version,
+                "v80_input_response": v80_input_res,
+                "v80_tts_result": v80_tts_res,
+                "v81_input_response": v81_input_res,
+                "v81_tts_result": v81_tts_res,
+                "final_postal_code": final_postal,
+                "final_form_state": final_form,
+                "timeline": list(stress_test_service.event_timeline)
+            }
         finally:
             speech_service.set_provider(original_provider)
 

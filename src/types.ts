@@ -155,3 +155,36 @@ export interface AudioQueueItem {
   provider?: string;
 }
 
+export type SpeechRecognitionState =
+  | 'IDLE'
+  | 'LISTENING'
+  | 'PROCESSING'
+  | 'ERROR'
+  | 'UNSUPPORTED';
+
+export interface VoiceMetrics {
+  voiceInteractionsCount: number;
+  voiceInterruptionsCount: number;
+  audioInterruptedForUserInputCount: number;
+  speechRecognitionErrorsCount: number;
+  finalTranscriptsAcceptedCount: number;
+  staleResultsBlockedAfterVoiceCount: number;
+  voiceActivationToStopLatencyMs: number | null;
+  isRealLatencyMeasurement: boolean;
+}
+
+export interface VoiceState {
+  micStatus: SpeechRecognitionState;
+  providerType: 'browser' | 'mock';
+  providerName: string;
+  isSupported: boolean;
+  activeVersion: number;
+  interimTranscript: string;
+  finalTranscript: string;
+  isBargeInActive: boolean;
+  lastInterruptionEvent: string | null;
+  errorMessage: string | null;
+  metrics: VoiceMetrics;
+}
+
+

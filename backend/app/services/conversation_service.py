@@ -148,11 +148,16 @@ class ConversationService:
 
         return " ".join(summary_parts)
 
-    async def process_user_input(self, text: str) -> Dict[str, Any]:
+    async def process_user_input(
+        self,
+        text: str,
+        input_source: str = "text",
+        interaction_version: Optional[int] = None
+    ) -> Dict[str, Any]:
         """
         Main natural language processing pipeline with strict version fencing:
-        1. Create new interaction version.
-        2. Emit USER_INPUT_RECEIVED.
+        1. Create new interaction version (or verify version if pre-established by voice barge-in).
+        2. Emit USER_INPUT_RECEIVED / VOICE_INTERACTION_ACCEPTED / FINAL_TRANSCRIPT_RECEIVED.
         3. Register and call AI interpretation.
         4. Check version fence.
         5. Validate structured action via ActionValidator.
@@ -167,17 +172,45 @@ class ConversationService:
                 "interaction_version": self.version_manager.active_version
             }
 
-        # 1. Increment and create new interaction version
-        req_version = await self.version_manager.create_new_version(reason=f"User natural language input: '{clean_text}'")
+        # 1. Handle interaction versioning
+        if interaction_version is not None and interaction_version == self.version_manager.active_version:
+            req_version = interaction_version
+        else:
+            req_version = await self.version_manager.create_new_version(
+                reason=f"User {input_source} input: '{clean_text}'"
+            )
         active_ver = self.version_manager.active_version
 
-        # 2. Emit USER_INPUT_RECEIVED
+        # 2. Emit Input & Voice Lifecycle Events
+        if input_source == "voice":
+            await self._emit_event(
+                event_type="VOICE_INTERACTION_ACCEPTED",
+                interaction_version=req_version,
+                active_version=active_ver,
+                message=f"Voice interaction accepted for v{req_version}",
+                details={"input_source": "voice"}
+            )
+            await self._emit_event(
+                event_type="FINAL_TRANSCRIPT_RECEIVED",
+                interaction_version=req_version,
+                active_version=active_ver,
+                message=f"Final transcript received: \"{clean_text}\"",
+                details={"transcript": clean_text}
+            )
+            await self._emit_event(
+                event_type="TRANSCRIPT_SUBMITTED",
+                interaction_version=req_version,
+                active_version=active_ver,
+                message=f"Voice transcript submitted to conversation pipeline (v{req_version})",
+                details={"transcript": clean_text}
+            )
+
         await self._emit_event(
             event_type="USER_INPUT_RECEIVED",
             interaction_version=req_version,
             active_version=active_ver,
-            message=f"User input received: \"{clean_text}\"",
-            details={"text": clean_text}
+            message=f"User {input_source} input received: \"{clean_text}\"",
+            details={"text": clean_text, "input_source": input_source}
         )
 
         user_msg = ConversationMessage(

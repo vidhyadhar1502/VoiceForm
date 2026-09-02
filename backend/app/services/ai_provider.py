@@ -218,9 +218,15 @@ class RuleBasedFallbackProvider(AIProvider):
             }
 
         # Postal Code / Pin code
-        postal_match = re.search(r"(?:postal code to|postal code is|postal code|pincode is|zip code is|zip is|pin is)\s*[:=]?\s*([0-9]{5,6})", clean_text, re.IGNORECASE)
-        if postal_match or (re.match(r"^\d{5,6}$", clean_text)):
-            val = postal_match.group(1) if postal_match else clean_text
+        postal_match = re.search(r"(?:postal code to|postal code is|postal code|pincode is|zip code is|zip is|pin is|change it to|make it|set it to|change to)\s*[:=]?\s*([0-9]{5,6})", clean_text, re.IGNORECASE)
+        digits_match = re.search(r"\b([0-9]{5,6})\b", clean_text)
+        if postal_match or (is_correction and digits_match) or (re.match(r"^\d{5,6}$", clean_text)):
+            if postal_match:
+                val = postal_match.group(1)
+            elif digits_match:
+                val = digits_match.group(1)
+            else:
+                val = clean_text
             action_type = UserIntent.CORRECT_FIELD.value if is_correction else UserIntent.UPDATE_FIELD.value
             return {
                 "action": action_type,

@@ -1,14 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, MessageSquare, Zap, RotateCcw, AlertTriangle, CheckCircle2, CornerDownRight } from 'lucide-react';
+import { Send, Sparkles, MessageSquare, Zap, RotateCcw, AlertTriangle, CheckCircle2, CornerDownRight, Mic, MicOff } from 'lucide-react';
 import { ConversationMessage } from '../types';
 
 interface ConversationPanelProps {
   messages: ConversationMessage[];
   activeVersion: number;
   isProcessing: boolean;
-  onSendMessage: (text: string) => Promise<void>;
+  onSendMessage: (text: string, source?: string) => Promise<void>;
   onTriggerInterruptionDemo: () => Promise<void>;
   onResetConversation: () => Promise<void>;
+  isListening?: boolean;
+  onToggleVoiceInput?: () => void;
 }
 
 const SAMPLE_PROMPTS = [
@@ -27,7 +29,9 @@ export const ConversationPanel: React.FC<ConversationPanelProps> = ({
   isProcessing,
   onSendMessage,
   onTriggerInterruptionDemo,
-  onResetConversation
+  onResetConversation,
+  isListening,
+  onToggleVoiceInput
 }) => {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -211,6 +215,20 @@ export const ConversationPanel: React.FC<ConversationPanelProps> = ({
 
       {/* Input Box */}
       <form onSubmit={handleSubmit} className="p-3 bg-white border-t border-slate-200 flex items-center space-x-2">
+        {onToggleVoiceInput && (
+          <button
+            type="button"
+            onClick={onToggleVoiceInput}
+            title={isListening ? 'Stop listening' : 'Start voice input (Barge-in enabled)'}
+            className={`p-2.5 rounded-lg border transition-all flex items-center justify-center cursor-pointer ${
+              isListening
+                ? 'bg-rose-600 text-white border-rose-600 animate-pulse ring-2 ring-rose-300'
+                : 'bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-600 border-slate-200 hover:border-rose-300'
+            }`}
+          >
+            {isListening ? <MicOff className="w-4 h-4 animate-spin" /> : <Mic className="w-4 h-4" />}
+          </button>
+        )}
         <input
           type="text"
           value={inputText}
