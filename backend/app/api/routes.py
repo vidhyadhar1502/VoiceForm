@@ -11,6 +11,8 @@ from backend.app.services.task_manager import TaskManager
 from backend.app.services.validation_service import ValidationService
 from backend.app.services.stress_test_service import StressTestService
 from backend.app.services.conversation_service import ConversationService
+from backend.app.services.speech_service import SpeechService
+from backend.app.services.speech_provider import RimeProvider, MockSpeechProvider
 from backend.app.websocket.connection_manager import ConnectionManager
 
 class StressTestRequest(BaseModel):
@@ -31,6 +33,25 @@ class UpdateFieldRequest(BaseModel):
 class ResetRequest(BaseModel):
     initial_version: int = 10
 
+class SpeechGenerateRequest(BaseModel):
+    text: str
+    version: Optional[int] = None
+    uncancellable: bool = False
+
+class AudioPlaybackEventRequest(BaseModel):
+    event_type: str
+    interaction_version: int
+    task_id: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+
+class SwitchSpeechProviderRequest(BaseModel):
+    provider: str  # "rime" | "mock"
+    artificial_delay: float = 0.0
+    should_fail: bool = False
+
+class AudioRaceTestRequest(BaseModel):
+    scenario: str = "MODE_A"  # "MODE_A" | "MODE_B" | "MODE_C"
+
 def create_api_router(
     version_manager: InteractionVersionManager,
     task_manager: TaskManager,
@@ -39,6 +60,7 @@ def create_api_router(
     validation_service: ValidationService,
     stress_test_service: StressTestService,
     conversation_service: ConversationService,
+    speech_service: SpeechService,
     ws_manager: ConnectionManager
 ) -> APIRouter:
     router = APIRouter()
@@ -143,6 +165,166 @@ def create_api_router(
             "active_version": version_manager.active_version,
             "form_state": form_state_manager.get_state().model_dump()
         }
+
+    @router.get("/speech/status")
+    async def get_speech_status():
+        """Returns provider information, active version, and audio metrics."""
+        return {
+            "provider_info": speech_service.get_provider_info(),
+            "metrics": speech_service.get_metrics(),
+            "active_version": version_manager.active_version
+        }
+
+    @router.post("/speech/provider")
+    async def switch_speech_provider(req: SwitchSpeechProviderRequest):
+        """Switches between Rime and Mock speech providers with test parameters."""
+        if req.provider.lower() == "rime":
+            provider = RimeProvider()
+        else:
+            provider = MockSpeechProvider(
+                artificial_delay=req.artificial_delay,
+                should_fail=req.should_fail
+            )
+        speech_service.set_provider(provider)
+        return {
+            "status": "provider_switched",
+            "provider_info": speech_service.get_provider_info()
+        }
+
+    @router.post("/speech/generate")
+    async def generate_speech_audio(req: SpeechGenerateRequest):
+        """Triggers speech synthesis for a given response text under version fencing."""
+        ver = req.version if req.version is not None else version_manager.active_version
+        result = await speech_service.synthesize_response(
+            text=req.text,
+            interaction_version=ver,
+            uncancellable=req.uncancellable
+        )
+        return result
+
+    @router.post("/speech/playback-event")
+    async def log_playback_event(req: AudioPlaybackEventRequest):
+        """Receives browser audio playback lifecycle events and records them in the timeline."""
+        await speech_service.record_audio_playback_event(
+            event_type=req.event_type,
+            interaction_version=req.interaction_version,
+            task_id=req.task_id,
+            details=req.details
+        )
+        return {"status": "recorded"}
+
+    @router.post("/demo/audio-race-test")
+    async def run_audio_race_test(req: AudioRaceTestRequest):
+        """
+        Runs automated race condition simulations for speech pipeline:
+        - MODE_A: Stale TTS Generation (v40 3s delay interrupted by v41 -> v40 blocked as stale).
+        - MODE_B: Stop Current Playback (v50 playing interrupted by v51 -> v50 playback stopped, queue cleared).
+        - MODE_C: Multiple Queued Responses (v60, v61, v62 fired rapidly -> only v62 eligible for playback).
+        """
+        import asyncio
+        original_provider = speech_service.provider
+
+        try:
+            if req.scenario == "MODE_A":
+                # Mode A: Stale TTS Generation
+                # 1. Reset to v40
+                version_manager.reset(initial_version=40)
+                mock_provider = MockSpeechProvider(artificial_delay=2.0)
+                speech_service.set_provider(mock_provider)
+
+                # 2. Launch TTS for v40 (uncancellable to simulate slow network payload returning)
+                task_v40 = asyncio.create_task(
+                    speech_service.synthesize_response(
+                        text="I have updated your address to Chennai.",
+                        interaction_version=40,
+                        uncancellable=True
+                    )
+                )
+
+                # 3. Interrupt after 0.3s with v41
+                await asyncio.sleep(0.3)
+                version_manager.create_new_version(trigger_reason="User voice interruption: 'Actually no, postal code is 600028'")
+                
+                # 4. Await v40 completion
+                v40_result = await task_v40
+
+                return {
+                    "scenario": "MODE_A",
+                    "description": "Stale TTS Generation Interruption",
+                    "v40_result": v40_result,
+                    "active_version": version_manager.active_version,
+                    "v40_blocked_as_stale": v40_result.get("is_stale", False),
+                    "timeline": list(stress_test_service.event_timeline)
+                }
+
+            elif req.scenario == "MODE_B":
+                # Mode B: Stop Current Playback
+                version_manager.reset(initial_version=50)
+                mock_provider = MockSpeechProvider(artificial_delay=0.0)
+                speech_service.set_provider(mock_provider)
+
+                # Synthesize v50 audio
+                v50_result = await speech_service.synthesize_response(
+                    text="Your date of birth has been set.",
+                    interaction_version=50
+                )
+                
+                # Simulate playback start
+                await speech_service.record_audio_playback_event(
+                    event_type="AUDIO_PLAYBACK_STARTED",
+                    interaction_version=50,
+                    task_id=v50_result.get("task_id")
+                )
+
+                # User interrupts with v51
+                await asyncio.sleep(0.2)
+                version_manager.create_new_version(trigger_reason="User voice interruption: 'Wait, correct date is 1992'")
+
+                # Playback stopped event
+                await speech_service.record_audio_playback_event(
+                    event_type="AUDIO_PLAYBACK_STOPPED",
+                    interaction_version=50,
+                    task_id=v50_result.get("task_id"),
+                    details={"reason": "interaction_invalidated"}
+                )
+
+                return {
+                    "scenario": "MODE_B",
+                    "description": "Stop Current Playback on Interruption",
+                    "v50_result": v50_result,
+                    "active_version": version_manager.active_version,
+                    "timeline": list(stress_test_service.event_timeline)
+                }
+
+            elif req.scenario == "MODE_C":
+                # Mode C: Multiple Queued Responses
+                version_manager.reset(initial_version=60)
+                mock_provider = MockSpeechProvider(artificial_delay=0.1)
+                speech_service.set_provider(mock_provider)
+
+                t1 = asyncio.create_task(speech_service.synthesize_response("Message 60", interaction_version=60, uncancellable=True))
+                await asyncio.sleep(0.05)
+                version_manager.create_new_version(trigger_reason="Input 61")
+                t2 = asyncio.create_task(speech_service.synthesize_response("Message 61", interaction_version=61, uncancellable=True))
+                await asyncio.sleep(0.05)
+                version_manager.create_new_version(trigger_reason="Input 62")
+                t3 = asyncio.create_task(speech_service.synthesize_response("Message 62", interaction_version=62, uncancellable=True))
+
+                r1, r2, r3 = await asyncio.gather(t1, t2, t3)
+
+                return {
+                    "scenario": "MODE_C",
+                    "description": "Multiple Rapid Interrupted Requests",
+                    "v60_is_stale": r1.get("is_stale"),
+                    "v61_is_stale": r2.get("is_stale"),
+                    "v62_is_stale": r3.get("is_stale"),
+                    "active_version": version_manager.active_version,
+                    "timeline": list(stress_test_service.event_timeline)
+                }
+            else:
+                raise HTTPException(status_code=400, detail=f"Unknown scenario {req.scenario}")
+        finally:
+            speech_service.set_provider(original_provider)
 
     @router.get("/demo/timeline")
     async def get_timeline():

@@ -117,3 +117,40 @@ export interface SystemSnapshot {
   active_tasks_count: number;
   timeline: TimelineEvent[];
 }
+
+export type SpeechStatus =
+  | 'IDLE'
+  | 'GENERATING'
+  | 'QUEUED'
+  | 'PLAYING'
+  | 'INTERRUPTED'
+  | 'BLOCKED_STALE';
+
+export interface SpeechProviderInfo {
+  provider_name: string;
+  is_fallback: boolean;
+  rime_configured: boolean;
+  model: string;
+  voice: string;
+}
+
+export interface SpeechMetrics {
+  total_tts_requests: number;
+  cancelled_tts_requests: number;
+  completed_tts_requests: number;
+  stale_tts_results_blocked: number;
+  audio_interruptions: number;
+  audio_stop_requests: number;
+  interruption_stop_latency_ms?: number;
+}
+
+export interface AudioQueueItem {
+  id: string;
+  interaction_version: number;
+  audio_url: string;
+  audio_base64?: string;
+  format?: string;
+  task_id?: string;
+  provider?: string;
+}
+

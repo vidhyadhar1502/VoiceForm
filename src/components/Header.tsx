@@ -23,11 +23,11 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-bold tracking-tight text-slate-900">VoiceForm Engine</h1>
               <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                Phase 2: Stress-Test Engine
+                Phase 4: Rime TTS &amp; Version-Safe Audio Pipeline
               </span>
             </div>
             <p className="text-xs text-slate-500 font-medium">
-              Deterministic Race-Condition &amp; Version-Fencing Demonstration
+              Real-time Voice Conversation, Version-Fenced State &amp; TTS Pipeline
             </p>
           </div>
         </div>

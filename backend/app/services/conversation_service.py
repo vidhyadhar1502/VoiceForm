@@ -17,6 +17,7 @@ from backend.app.services.stale_result_guard import StaleResultGuard
 from backend.app.services.validation_service import ValidationService
 from backend.app.services.ai_service import AIService
 from backend.app.services.action_validator import ActionValidator
+from backend.app.services.speech_service import SpeechService
 
 FIELD_SEQUENCE = [
     "full_name",
@@ -45,6 +46,7 @@ class ConversationService:
         validation_service: ValidationService,
         ai_service: AIService,
         action_validator: Optional[ActionValidator] = None,
+        speech_service: Optional[SpeechService] = None,
         broadcast_fn: Optional[Callable[[Dict[str, Any]], Any]] = None,
         timeline_ref: Optional[List[Dict[str, Any]]] = None
     ):
@@ -55,6 +57,7 @@ class ConversationService:
         self.validation_service = validation_service
         self.ai_service = ai_service
         self.action_validator = action_validator or ActionValidator()
+        self.speech_service = speech_service
         self.broadcast_fn = broadcast_fn
         self.timeline: List[Dict[str, Any]] = timeline_ref if timeline_ref is not None else []
         self.messages: List[ConversationMessage] = []
@@ -432,6 +435,15 @@ class ConversationService:
                     asyncio.create_task(res)
             except Exception:
                 pass
+
+        # 11. Trigger Speech Synthesis pipeline (Async, fenced by version)
+        if self.speech_service and final_response_text:
+            asyncio.create_task(
+                self.speech_service.synthesize_response(
+                    text=final_response_text,
+                    interaction_version=req_version
+                )
+            )
 
         return {
             "success": True,

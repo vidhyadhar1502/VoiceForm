@@ -13,6 +13,7 @@ from backend.app.services.stress_test_service import StressTestService
 from backend.app.services.ai_service import AIService
 from backend.app.services.action_validator import ActionValidator
 from backend.app.services.conversation_service import ConversationService
+from backend.app.services.speech_service import SpeechService
 from backend.app.websocket.connection_manager import ConnectionManager
 from backend.app.api.routes import create_api_router
 
@@ -38,6 +39,15 @@ stress_test_service = StressTestService(
     broadcast_fn=ws_manager.broadcast
 )
 
+# Speech Service Singleton
+speech_service = SpeechService(
+    version_manager=version_manager,
+    task_manager=task_manager,
+    stale_guard=stale_guard,
+    broadcast_fn=ws_manager.broadcast,
+    timeline_ref=stress_test_service.event_timeline
+)
+
 conversation_service = ConversationService(
     version_manager=version_manager,
     form_state_manager=form_state_manager,
@@ -46,6 +56,7 @@ conversation_service = ConversationService(
     validation_service=validation_service,
     ai_service=ai_service,
     action_validator=action_validator,
+    speech_service=speech_service,
     broadcast_fn=ws_manager.broadcast,
     timeline_ref=stress_test_service.event_timeline
 )
@@ -96,6 +107,7 @@ api_router = create_api_router(
     validation_service=validation_service,
     stress_test_service=stress_test_service,
     conversation_service=conversation_service,
+    speech_service=speech_service,
     ws_manager=ws_manager
 )
 app.include_router(api_router, prefix=settings.API_PREFIX)

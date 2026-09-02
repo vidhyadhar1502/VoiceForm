@@ -6,8 +6,20 @@ import { FormStateViewer } from './components/FormStateViewer';
 import { EventTimeline } from './components/EventTimeline';
 import { TaskRegistryViewer } from './components/TaskRegistryViewer';
 import { ConversationPanel } from './components/ConversationPanel';
-import { FormState, TaskRecord, TimelineEvent, StressTestResponse, ConversationMessage } from './types';
-import { Sparkles, Activity } from 'lucide-react';
+import { SpeechStatusPanel } from './components/SpeechStatusPanel';
+import {
+  FormState,
+  TaskRecord,
+  TimelineEvent,
+  StressTestResponse,
+  ConversationMessage,
+  SpeechStatus,
+  SpeechProviderInfo,
+  SpeechMetrics,
+  AudioQueueItem,
+} from './types';
+import { audioPlaybackManager } from './services/audioPlaybackManager';
+import { Sparkles, Activity, Volume2 } from 'lucide-react';
 
 export const App: React.FC = () => {
   // State
@@ -27,6 +39,27 @@ export const App: React.FC = () => {
   const [isProcessingAi, setIsProcessingAi] = useState<boolean>(false);
   const [testSuccess, setTestSuccess] = useState<boolean | null>(null);
 
+  // Speech & Audio state
+  const [speechStatus, setSpeechStatus] = useState<SpeechStatus>('IDLE');
+  const [currentPlayingVersion, setCurrentPlayingVersion] = useState<number | null>(null);
+  const [lastBlockedAudioVersion, setLastBlockedAudioVersion] = useState<number | null>(null);
+  const [interruptionLatencyMs, setInterruptionLatencyMs] = useState<number | null>(null);
+  const [providerInfo, setProviderInfo] = useState<SpeechProviderInfo>({
+    provider_name: 'Rime',
+    is_fallback: false,
+    rime_configured: true,
+    model: 'mist',
+    voice: 'marsh',
+  });
+  const [speechMetrics, setSpeechMetrics] = useState<SpeechMetrics>({
+    total_tts_requests: 0,
+    cancelled_tts_requests: 0,
+    completed_tts_requests: 0,
+    stale_tts_results_blocked: 0,
+    audio_interruptions: 0,
+    audio_stop_requests: 0,
+  });
+
   // Active View Mode
   const [activeTab, setActiveTab] = useState<'conversation' | 'stresstest'>('conversation');
 
@@ -39,6 +72,33 @@ export const App: React.FC = () => {
 
   const wsRef = useRef<WebSocket | null>(null);
 
+  // Fetch speech status & metrics
+  const fetchSpeechStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/speech/status');
+      if (res.ok) {
+        const data = await res.json();
+        setProviderInfo({
+          provider_name: data.provider_name || 'Rime',
+          is_fallback: data.is_fallback || false,
+          rime_configured: data.rime_configured ?? true,
+          model: data.model || 'mist',
+          voice: data.voice || 'marsh',
+        });
+        setSpeechMetrics(data.metrics || {
+          total_tts_requests: 0,
+          cancelled_tts_requests: 0,
+          completed_tts_requests: 0,
+          stale_tts_results_blocked: 0,
+          audio_interruptions: 0,
+          audio_stop_requests: 0,
+        });
+      }
+    } catch {
+      // Backend may be starting
+    }
+  }, []);
+
   // Poll state snapshot
   const fetchStateSnapshot = useCallback(async () => {
     try {
@@ -46,6 +106,7 @@ export const App: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         setActiveVersion(data.active_version);
+        audioPlaybackManager.setActiveVersion(data.active_version);
         setFormState(data.form_state);
         setTasks(data.tasks || []);
         setStaleBlocksCount(data.stale_results_blocked || 0);
@@ -61,10 +122,49 @@ export const App: React.FC = () => {
         const convData = await convRes.json();
         setMessages(convData.messages || []);
       }
+
+      await fetchSpeechStatus();
     } catch {
       // Backend may be booting up
     }
-  }, []);
+  }, [fetchSpeechStatus]);
+
+  // Audio Playback Manager Subscriptions
+  useEffect(() => {
+    // Set callback to report playback events to backend
+    audioPlaybackManager.setPlaybackEventCallback(async (eventType, version, taskId, details) => {
+      try {
+        await fetch('/api/speech/playback-event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            event_type: eventType,
+            interaction_version: version,
+            task_id: taskId,
+            details,
+          }),
+        });
+        fetchSpeechStatus();
+      } catch {
+        // ignore
+      }
+    });
+
+    const unsubscribe = audioPlaybackManager.subscribe((state) => {
+      setSpeechStatus(state.status);
+      setCurrentPlayingVersion(state.currentPlayingVersion);
+      if (state.lastBlockedVersion !== null) {
+        setLastBlockedAudioVersion(state.lastBlockedVersion);
+      }
+      if (state.interruptionLatencyMs !== null) {
+        setInterruptionLatencyMs(state.interruptionLatencyMs);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [fetchSpeechStatus]);
 
   // WebSocket Connection
   useEffect(() => {
@@ -86,6 +186,7 @@ export const App: React.FC = () => {
           const data = JSON.parse(event.data);
           if (data.event === 'session_snapshot') {
             setActiveVersion(data.active_version);
+            audioPlaybackManager.setActiveVersion(data.active_version);
             setFormState(data.form_state);
             setTasks(data.tasks || []);
             setStaleBlocksCount(data.stale_blocks_count || 0);
@@ -93,19 +194,44 @@ export const App: React.FC = () => {
           } else if (data.event === 'stress_test_event' || data.event === 'structured_event') {
             const evt: TimelineEvent = data.payload;
             setTimeline((prev) => [...prev, evt]);
-            if (data.active_version) setActiveVersion(data.active_version);
+            if (data.active_version) {
+              setActiveVersion(data.active_version);
+              audioPlaybackManager.setActiveVersion(data.active_version);
+            }
             if (data.form_state) setFormState(data.form_state);
             if (data.stale_blocks_count !== undefined) {
               setStaleBlocksCount(data.stale_blocks_count);
             }
           } else if (data.event === 'form_state_updated') {
-            if (data.active_version) setActiveVersion(data.active_version);
+            if (data.active_version) {
+              setActiveVersion(data.active_version);
+              audioPlaybackManager.setActiveVersion(data.active_version);
+            }
             if (data.form_state) setFormState(data.form_state);
             if (data.message) {
               setMessages((prev) => [...prev, data.message]);
             }
+          } else if (data.event === 'speech_ready') {
+            // Audio payload received from backend
+            const payload = data.payload;
+            if (payload) {
+              const audioUrl = payload.audio_url || (payload.audio_base64 ? `data:audio/wav;base64,${payload.audio_base64}` : '');
+              if (audioUrl) {
+                audioPlaybackManager.enqueueAudio({
+                  id: payload.task_id || `audio-${Date.now()}`,
+                  interaction_version: payload.interaction_version,
+                  audio_url: audioUrl,
+                  task_id: payload.task_id,
+                  provider: payload.provider,
+                });
+              }
+            }
+            fetchSpeechStatus();
+          } else if (data.event === 'speech_status_update') {
+            fetchSpeechStatus();
           } else if (data.event === 'session_reset' || data.event === 'conversation_reset') {
             setActiveVersion(data.active_version);
+            audioPlaybackManager.reset(data.active_version);
             setFormState(data.form_state);
             setTasks([]);
             setTimeline([]);
@@ -114,6 +240,8 @@ export const App: React.FC = () => {
             setCancelledTasksCount(0);
             setActiveTasksCount(0);
             setTestSuccess(null);
+            setLastBlockedAudioVersion(null);
+            fetchSpeechStatus();
           }
         } catch {
           // ignore non-json
@@ -137,7 +265,7 @@ export const App: React.FC = () => {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (wsRef.current) wsRef.current.close();
     };
-  }, [fetchStateSnapshot]);
+  }, [fetchStateSnapshot, fetchSpeechStatus]);
 
   // Send Conversation Message
   const handleSendMessage = async (text: string) => {
@@ -151,7 +279,10 @@ export const App: React.FC = () => {
 
       if (response.ok) {
         const data = await response.json();
-        if (data.active_version) setActiveVersion(data.active_version);
+        if (data.active_version) {
+          setActiveVersion(data.active_version);
+          audioPlaybackManager.setActiveVersion(data.active_version);
+        }
         if (data.form_state) setFormState(data.form_state);
       }
     } catch (err) {
@@ -166,14 +297,12 @@ export const App: React.FC = () => {
   const handleTriggerInterruptionDemo = async () => {
     setIsProcessingAi(true);
     try {
-      // Fire first slow input
       const p1 = fetch('/api/conversation/input', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: 'Set my postal code to 600001' }),
       });
 
-      // Rapidly fire contradictory second input 40ms later
       await new Promise((r) => setTimeout(r, 40));
 
       const p2 = fetch('/api/conversation/input', {
@@ -195,12 +324,85 @@ export const App: React.FC = () => {
   const handleResetConversation = async () => {
     try {
       await fetch('/api/conversation/reset', { method: 'POST' });
+      audioPlaybackManager.reset(10);
       setMessages([]);
       setTimeline([]);
       setTestSuccess(null);
+      setLastBlockedAudioVersion(null);
       fetchStateSnapshot();
     } catch (err) {
       console.error("Reset failed:", err);
+    }
+  };
+
+  // Play Test Response for Active Version
+  const handlePlayTestResponse = async () => {
+    try {
+      const res = await fetch('/api/speech/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: `VoiceForm active version is v${activeVersion}. All fields are protected by version fencing.`,
+          interaction_version: activeVersion,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.audio_base64) {
+          audioPlaybackManager.enqueueAudio({
+            id: data.task_id || `test-${Date.now()}`,
+            interaction_version: data.interaction_version,
+            audio_url: `data:audio/wav;base64,${data.audio_base64}`,
+            task_id: data.task_id,
+            provider: data.provider,
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Play test response failed:", err);
+    }
+  };
+
+  // Stop Audio Playback Immediately
+  const handleStopAudio = () => {
+    audioPlaybackManager.stopCurrentAudio('User clicked Stop Audio button');
+  };
+
+  // Switch Provider
+  const handleSwitchProvider = async (provider: string, delay: number = 0.0) => {
+    try {
+      await fetch('/api/speech/provider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider_name: provider, artificial_delay: delay }),
+      });
+      await fetchSpeechStatus();
+    } catch (err) {
+      console.error("Switch provider failed:", err);
+    }
+  };
+
+  // Run Race Tests
+  const handleRunRaceTest = async (mode: 'MODE_A' | 'MODE_B' | 'MODE_C') => {
+    setIsRunning(true);
+    try {
+      const res = await fetch('/api/demo/audio-race-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.active_version) {
+          setActiveVersion(data.active_version);
+          audioPlaybackManager.setActiveVersion(data.active_version);
+        }
+      }
+    } catch (err) {
+      console.error("Race test failed:", err);
+    } finally {
+      setIsRunning(false);
+      fetchStateSnapshot();
     }
   };
 
@@ -226,6 +428,7 @@ export const App: React.FC = () => {
       if (response.ok) {
         const data: StressTestResponse = await response.json();
         setActiveVersion(data.final_interaction_version);
+        audioPlaybackManager.setActiveVersion(data.final_interaction_version);
         setFormState(data.final_form_state);
         setTimeline(data.event_timeline);
         setStaleBlocksCount(data.stale_results_blocked);
@@ -250,9 +453,11 @@ export const App: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ initial_version: 10 }),
       });
+      audioPlaybackManager.reset(10);
       fetchStateSnapshot();
       setTimeline([]);
       setTestSuccess(null);
+      setLastBlockedAudioVersion(null);
     } catch {
       // ignore
     }
@@ -277,6 +482,22 @@ export const App: React.FC = () => {
           mode={mode}
         />
 
+        {/* Speech Status Panel (Phase 4 Authority) */}
+        <SpeechStatusPanel
+          status={speechStatus}
+          activeVersion={activeVersion}
+          currentPlayingVersion={currentPlayingVersion}
+          lastBlockedVersion={lastBlockedAudioVersion}
+          interruptionLatencyMs={interruptionLatencyMs}
+          providerInfo={providerInfo}
+          metrics={speechMetrics}
+          onPlayTestResponse={handlePlayTestResponse}
+          onStopAudio={handleStopAudio}
+          onSwitchProvider={handleSwitchProvider}
+          onRunRaceTest={handleRunRaceTest}
+          isTesting={isRunning}
+        />
+
         {/* View Mode Switcher */}
         <div className="flex items-center justify-between border-b border-slate-200 pb-3">
           <div className="flex items-center space-x-2">
@@ -289,7 +510,7 @@ export const App: React.FC = () => {
               }`}
             >
               <Sparkles className="w-4 h-4" />
-              <span>AI Conversation & Natural Language</span>
+              <span>AI Conversation &amp; Voice Pipeline</span>
             </button>
 
             <button
@@ -307,7 +528,7 @@ export const App: React.FC = () => {
 
           <div className="text-xs text-slate-500 hidden sm:block">
             {activeTab === 'conversation'
-              ? 'Real-time Gemini action interpreter with interaction-version safety fencing'
+              ? 'Real-time Gemini action interpreter with Rime TTS & interaction-version safety fencing'
               : 'Deterministic 5s delay race condition with configurable cancellation vs. fencing'}
           </div>
         </div>
@@ -389,3 +610,4 @@ export const App: React.FC = () => {
 };
 
 export default App;
+
