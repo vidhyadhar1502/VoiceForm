@@ -314,3 +314,145 @@ async def test_conversation_service_triggers_speech_synthesis(speech_pipeline):
     # Allow async TTS dispatch task to run
     await asyncio.sleep(0.1)
     assert svc.completed_tts_requests >= 1
+
+
+@pytest.mark.asyncio
+async def test_mode_a_interactive_scenario(speech_pipeline):
+    """
+    Test 10: Mode A Interactive Scenario - Stale TTS Generation.
+    Start v40 -> Interruption creates v41 -> active_version == 41 -> v40 audio is stale.
+    """
+    svc: SpeechService = speech_pipeline["speech_svc"]
+    version_mgr: InteractionVersionManager = speech_pipeline["version_mgr"]
+    provider: MockSpeechProvider = speech_pipeline["speech_provider"]
+
+    # 1. Start v40
+    version_mgr.reset(initial_version=40)
+    old_version = version_mgr.active_version
+    assert old_version == 40
+
+    # 2. Launch v40 synthesis with artificial delay (uncancellable to simulate delayed response arrival)
+    provider.artificial_delay = 0.2
+    task_v40 = asyncio.create_task(
+        svc.synthesize_response(
+            text="I have updated your address to Chennai.",
+            interaction_version=40,
+            uncancellable=True
+        )
+    )
+
+    # 3. Interrupt with new voice interaction
+    await asyncio.sleep(0.05)
+    new_version = await version_mgr.create_new_version(
+        reason="User voice interruption: 'Actually no, postal code is 600028'"
+    )
+
+    # 4. Verify version progression
+    assert new_version == 41
+    assert version_mgr.active_version == 41
+    assert old_version != version_mgr.active_version
+
+    # 5. Await delayed v40 result
+    v40_result = await task_v40
+
+    # 6. Verify v40 audio was intercepted and blocked as stale
+    assert v40_result["success"] is False
+    assert v40_result["is_stale"] is True
+    assert v40_result["interaction_version"] == 40
+    assert v40_result["active_version"] == 41
+    assert svc.stale_tts_results_blocked >= 1
+
+
+@pytest.mark.asyncio
+async def test_mode_b_interactive_scenario(speech_pipeline):
+    """
+    Test 11: Mode B Interactive Scenario - Stop Current Playback.
+    Start v50 -> Synthesize & play -> Interrupt creates v51 -> active_version == 51.
+    """
+    svc: SpeechService = speech_pipeline["speech_svc"]
+    version_mgr: InteractionVersionManager = speech_pipeline["version_mgr"]
+
+    # 1. Start v50
+    version_mgr.reset(initial_version=50)
+    old_version = version_mgr.active_version
+    assert old_version == 50
+
+    # 2. Synthesize v50
+    v50_res = await svc.synthesize_response(
+        text="Your date of birth has been set.",
+        interaction_version=50
+    )
+    assert v50_res["success"] is True
+
+    # 3. Simulate playback start
+    await svc.record_audio_playback_event(
+        event_type="AUDIO_PLAYBACK_STARTED",
+        interaction_version=50,
+        task_id=v50_res.get("task_id")
+    )
+
+    # 4. Interruption occurs -> create v51
+    await asyncio.sleep(0.02)
+    new_version = await version_mgr.create_new_version(
+        reason="User voice interruption: 'Wait, correct date is 1992'"
+    )
+
+    # 5. Verify version progression
+    assert new_version == 51
+    assert version_mgr.active_version == 51
+    assert old_version != version_mgr.active_version
+
+    # 6. Playback stopped event recorded
+    await svc.record_audio_playback_event(
+        event_type="AUDIO_PLAYBACK_STOPPED",
+        interaction_version=50,
+        task_id=v50_res.get("task_id"),
+        details={"reason": "interaction_invalidated"}
+    )
+    assert svc.audio_stop_requests >= 1
+
+
+@pytest.mark.asyncio
+async def test_mode_c_interactive_scenario(speech_pipeline):
+    """
+    Test 12: Mode C Interactive Scenario - Multiple Queued Responses.
+    Start v60 -> Create v61 -> Create v62 -> active_version == 62 -> Only v62 eligible.
+    """
+    svc: SpeechService = speech_pipeline["speech_svc"]
+    version_mgr: InteractionVersionManager = speech_pipeline["version_mgr"]
+    provider: MockSpeechProvider = speech_pipeline["speech_provider"]
+    provider.artificial_delay = 0.08
+
+    # 1. Start v60
+    version_mgr.reset(initial_version=60)
+    assert version_mgr.active_version == 60
+
+    # Launch v60
+    t1 = asyncio.create_task(svc.synthesize_response("Message 60", interaction_version=60, uncancellable=True))
+    await asyncio.sleep(0.02)
+
+    # Create v61
+    v61 = await version_mgr.create_new_version(reason="Input 61")
+    assert v61 == 61
+    assert version_mgr.active_version == 61
+    t2 = asyncio.create_task(svc.synthesize_response("Message 61", interaction_version=61, uncancellable=True))
+    await asyncio.sleep(0.02)
+
+    # Create v62
+    v62 = await version_mgr.create_new_version(reason="Input 62")
+    assert v62 == 62
+    assert version_mgr.active_version == 62
+    t3 = asyncio.create_task(svc.synthesize_response("Message 62", interaction_version=62, uncancellable=True))
+
+    r1, r2, r3 = await asyncio.gather(t1, t2, t3)
+
+    # Verify only v62 is eligible and valid
+    assert r1["is_stale"] is True
+    assert r1["success"] is False
+    assert r2["is_stale"] is True
+    assert r2["success"] is False
+    assert r3["is_stale"] is False
+    assert r3["success"] is True
+    assert r3["interaction_version"] == 62
+    assert r3["active_version"] == 62
+

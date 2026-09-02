@@ -55,8 +55,9 @@ class SpeechService:
             "provider_name": self.provider.provider_name,
             "is_fallback": self.provider.is_fallback,
             "rime_configured": bool(settings.RIME_API_KEY),
-            "model": settings.RIME_MODEL,
-            "voice": settings.RIME_VOICE
+            "model": getattr(self.provider, "model", settings.RIME_MODEL),
+            "voice": getattr(self.provider, "voice", settings.RIME_VOICE),
+            "endpoint": getattr(self.provider, "endpoint", settings.RIME_ENDPOINT)
         }
 
     def get_metrics(self) -> Dict[str, Any]:

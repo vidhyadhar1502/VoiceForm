@@ -217,7 +217,7 @@ def create_api_router(
     async def run_audio_race_test(req: AudioRaceTestRequest):
         """
         Runs automated race condition simulations for speech pipeline:
-        - MODE_A: Stale TTS Generation (v40 3s delay interrupted by v41 -> v40 blocked as stale).
+        - MODE_A: Stale TTS Generation (v40 2s delay interrupted by v41 -> v40 blocked as stale).
         - MODE_B: Stop Current Playback (v50 playing interrupted by v51 -> v50 playback stopped, queue cleared).
         - MODE_C: Multiple Queued Responses (v60, v61, v62 fired rapidly -> only v62 eligible for playback).
         """
@@ -243,7 +243,7 @@ def create_api_router(
 
                 # 3. Interrupt after 0.3s with v41
                 await asyncio.sleep(0.3)
-                version_manager.create_new_version(trigger_reason="User voice interruption: 'Actually no, postal code is 600028'")
+                v41 = await version_manager.create_new_version(reason="User voice interruption: 'Actually no, postal code is 600028'")
                 
                 # 4. Await v40 completion
                 v40_result = await task_v40
@@ -252,6 +252,8 @@ def create_api_router(
                     "scenario": "MODE_A",
                     "description": "Stale TTS Generation Interruption",
                     "v40_result": v40_result,
+                    "initial_version": 40,
+                    "new_version": v41,
                     "active_version": version_manager.active_version,
                     "v40_blocked_as_stale": v40_result.get("is_stale", False),
                     "timeline": list(stress_test_service.event_timeline)
@@ -278,7 +280,7 @@ def create_api_router(
 
                 # User interrupts with v51
                 await asyncio.sleep(0.2)
-                version_manager.create_new_version(trigger_reason="User voice interruption: 'Wait, correct date is 1992'")
+                v51 = await version_manager.create_new_version(reason="User voice interruption: 'Wait, correct date is 1992'")
 
                 # Playback stopped event
                 await speech_service.record_audio_playback_event(
@@ -292,6 +294,8 @@ def create_api_router(
                     "scenario": "MODE_B",
                     "description": "Stop Current Playback on Interruption",
                     "v50_result": v50_result,
+                    "initial_version": 50,
+                    "new_version": v51,
                     "active_version": version_manager.active_version,
                     "timeline": list(stress_test_service.event_timeline)
                 }
@@ -304,10 +308,10 @@ def create_api_router(
 
                 t1 = asyncio.create_task(speech_service.synthesize_response("Message 60", interaction_version=60, uncancellable=True))
                 await asyncio.sleep(0.05)
-                version_manager.create_new_version(trigger_reason="Input 61")
+                v61 = await version_manager.create_new_version(reason="Input 61")
                 t2 = asyncio.create_task(speech_service.synthesize_response("Message 61", interaction_version=61, uncancellable=True))
                 await asyncio.sleep(0.05)
-                version_manager.create_new_version(trigger_reason="Input 62")
+                v62 = await version_manager.create_new_version(reason="Input 62")
                 t3 = asyncio.create_task(speech_service.synthesize_response("Message 62", interaction_version=62, uncancellable=True))
 
                 r1, r2, r3 = await asyncio.gather(t1, t2, t3)
@@ -318,6 +322,9 @@ def create_api_router(
                     "v60_is_stale": r1.get("is_stale"),
                     "v61_is_stale": r2.get("is_stale"),
                     "v62_is_stale": r3.get("is_stale"),
+                    "v60_success": r1.get("success"),
+                    "v61_success": r2.get("success"),
+                    "v62_success": r3.get("success"),
                     "active_version": version_manager.active_version,
                     "timeline": list(stress_test_service.event_timeline)
                 }

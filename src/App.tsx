@@ -45,11 +45,12 @@ export const App: React.FC = () => {
   const [lastBlockedAudioVersion, setLastBlockedAudioVersion] = useState<number | null>(null);
   const [interruptionLatencyMs, setInterruptionLatencyMs] = useState<number | null>(null);
   const [providerInfo, setProviderInfo] = useState<SpeechProviderInfo>({
-    provider_name: 'Rime',
+    provider_name: 'Connecting...',
     is_fallback: false,
-    rime_configured: true,
-    model: 'mist',
-    voice: 'marsh',
+    rime_configured: false,
+    model: '',
+    voice: '',
+    endpoint: '',
   });
   const [speechMetrics, setSpeechMetrics] = useState<SpeechMetrics>({
     total_tts_requests: 0,
@@ -78,12 +79,14 @@ export const App: React.FC = () => {
       const res = await fetch('/api/speech/status');
       if (res.ok) {
         const data = await res.json();
+        const pInfo = data.provider_info || {};
         setProviderInfo({
-          provider_name: data.provider_name || 'Rime',
-          is_fallback: data.is_fallback || false,
-          rime_configured: data.rime_configured ?? true,
-          model: data.model || 'mist',
-          voice: data.voice || 'marsh',
+          provider_name: pInfo.provider_name || 'Mock (Deterministic)',
+          is_fallback: Boolean(pInfo.is_fallback),
+          rime_configured: Boolean(pInfo.rime_configured),
+          model: pInfo.model || '',
+          voice: pInfo.voice || '',
+          endpoint: pInfo.endpoint || '',
         });
         setSpeechMetrics(data.metrics || {
           total_tts_requests: 0,
@@ -389,7 +392,7 @@ export const App: React.FC = () => {
       const res = await fetch('/api/demo/audio-race-test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ scenario: mode }),
       });
       if (res.ok) {
         const data = await res.json();

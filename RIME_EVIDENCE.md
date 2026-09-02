@@ -2,12 +2,12 @@
 
 ## 1. Executive Summary
 
-Phase 4 introduces high-fidelity text-to-speech output powered by the **Rime Speech Engine** (`mist` model, `marsh` voice) into the **VoiceForm** architecture. The speech pipeline is designed from the ground up around the core system invariant:
+Phase 4 integrates text-to-speech output powered by the **Rime Speech Engine** (`mist` model, `amber` voice) into the **VoiceForm** architecture. The speech pipeline is engineered around the core system invariant:
 
 > **"Cancellation improves efficiency, but version fencing guarantees correctness."**
 
-Under this principle:
-- Network or compute cancellation aborts obsolete TTS tasks early to save resources.
+Under this invariant:
+- Network or compute cancellation aborts obsolete TTS tasks early to save compute and network resources.
 - If a slow, delayed, or uncancellable TTS synthesis completes after the user has interrupted or changed fields, **version fencing guarantees the user never hears obsolete audio**.
 
 ---
@@ -26,11 +26,11 @@ To ensure zero speech leakage, audio synthesis and playback pass through 5 seque
     - Verifies: interaction_version == active_version
     - Action if Stale: Aborts before making HTTP request to Rime API
     ↓
- 2. Rime TTS Synthesis Initiated (Background Task)
+ 2. Rime TTS Synthesis Initiated (Background Task in TaskManager)
     ↓
  [ CHECKPOINT 2: Backend Task Invalidation on Interruption ]
     - Action on New User Voice Input (v11): InteractionVersionManager advances active_version to 11
-    - TaskManager signals cancellation on in-flight v10 TTS task
+    - TaskManager signals asyncio cancellation on in-flight v10 TTS task
     ↓
  3. Rime API Response Received
     ↓
@@ -51,86 +51,95 @@ To ensure zero speech leakage, audio synthesis and playback pass through 5 seque
     - Action if Stale: Discards item, triggers next queued item, prevents speaker activation
     ↓
  6. Active Audio Output (Browser Speaker)
-    - If user interrupts while playing: `audioPlaybackManager.stopCurrentAudio()` executes synchronously (< 5ms), clearing speaker output instantly.
+    - If user interrupts while playing: `audioPlaybackManager.stopCurrentAudio()` executes synchronously, clearing speaker output and queue.
 ```
 
 ---
 
-## 3. Rime Engine Configuration & Integration
+## 3. Real Rime Configuration (Single Source of Truth)
 
-### Rime Provider Specifications
-- **API Endpoint:** `https://users.rime.ai/v1/rime-tts`
-- **Model:** `mist` (ultra-low latency conversational model)
-- **Voice:** `marsh`
-- **Audio Format:** `audio/wav` (PCM 22050Hz)
-- **Latency Optimization:** `reduce_latency: true`, HTTP/2 multiplexing via `httpx.AsyncClient`
-- **Security:** Rime API key is isolated server-side via `RIME_API_KEY` and never exposed to the client.
+All components reference environment variables as the single source of truth:
 
-### Fallback & Determinism Strategy
-When `RIME_API_KEY` is not present or during automated unit testing, the system seamlessly uses `MockSpeechProvider`. This provider produces compliant, valid Base64-encoded WAV PCM headers and supports artificial delay injection for automated race-condition testing.
+| Configuration Parameter | Environment Variable | Default Value | Description |
+|---|---|---|---|
+| **API Key** | `RIME_API_KEY` | `""` (Empty string) | Secret server-side token; never sent to browser |
+| **Model** | `RIME_MODEL` | `"mist"` | Ultra-low latency conversational speech model |
+| **Voice** | `RIME_VOICE` | `"amber"` | Conversational voice persona |
+| **Endpoint** | `RIME_ENDPOINT` | `"https://users.rime.ai/v1/rime-tts"` | Rime REST synthesis endpoint |
+| **Audio Format** | `Accept: audio/mp3` | `"audio/mp3"` | Standard MP3 audio returned by Rime API |
+| **Transport** | HTTP POST | `httpx.AsyncClient` | JSON payload `{"text", "speaker", "modelId"}` |
+
+### System Alignment Across Layers
+- **Backend Core:** `backend/app/core/config.py` loads `RIME_API_KEY`, `RIME_MODEL`, `RIME_VOICE`, `RIME_ENDPOINT`.
+- **RimeProvider:** `backend/app/services/speech_provider.py` passes `model` and `speaker` in request payload and returns `audio/mp3`.
+- **API Status Endpoint:** `GET /api/speech/status` returns `provider_name`, `is_fallback`, `rime_configured`, `model`, `voice`, and `endpoint`.
+- **Frontend UI:** `SpeechStatusPanel.tsx` and `App.tsx` dynamically display the active configuration returned by the backend and distinguish **Rime Active**, **Mock Active**, **Rime Configured**, **Rime Not Configured**, and **Fallback Active**.
+- **Configuration Spec:** `.env.example` documents all 4 variables with matching defaults.
 
 ---
 
-## 4. Test Suite Execution & Evidence
+## 4. Test Strategy: Real Integration vs. Deterministic Mock Tests
 
-### Test Summary
-All **37 automated backend tests** are passing 100% green across all 4 project phases:
+To maintain scientific rigor, tests are strictly categorized into two types:
 
-```bash
-============================= test session starts ==============================
-platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0
-rootdir: /app/applet
-configfile: pytest.ini
-plugins: anyio-4.14.2, asyncio-1.4.0
-asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
-collected 37 items
+### A. Real Rime Live Integration Smoke Test (`backend/tests/manual_rime_smoke_test.py` & `backend/tests/test_rime_integration.py`)
+- **Objective:** Verifies actual network connectivity, authentication, response headers, and audio binary payload with the external Rime REST API.
+- **Execution Condition:** Runs only when `RIME_API_KEY` is present.
+- **Smoke Test Procedure:**
+  ```bash
+  export RIME_API_KEY="your_actual_api_key"
+  python backend/tests/manual_rime_smoke_test.py
+  ```
+- **Output Structure:**
+  ```text
+  RIME_SMOKE_TEST_SUCCESS
+  Model: mist
+  Voice: amber
+  Endpoint: https://users.rime.ai/v1/rime-tts
+  Audio bytes: <actual_byte_count>
+  Format: audio/mp3
+  Interaction Version Tag: 101
+  ```
+  *(API keys are never logged or exposed).*
 
-backend/tests/test_ai_orchestration.py ..........                        [ 27%]
-backend/tests/test_form_state.py ...                                     [ 35%]
-backend/tests/test_interruptions.py ...                                  [ 43%]
-backend/tests/test_speech_pipeline.py .........                          [ 67%]
-backend/tests/test_stale_results.py ..                                   [ 72%]
-backend/tests/test_stress_test.py .......                                [ 91%]
-backend/tests/test_versioning.py ...                                     [100%]
+### B. Deterministic Architectural Unit & Race Tests (`backend/tests/test_speech_pipeline.py`)
+- **Objective:** Verifies state machine correctness, async version monotonicity, task cancellation, and 5-checkpoint stale audio suppression under reproducible race conditions.
+- **Provider Used:** `MockSpeechProvider` with configurable artificial delays and valid PCM WAV audio headers.
+- **Scenarios Verified:**
 
-============================== 37 passed in 6.79s ==============================
-```
+| Test # | Test Name | Invariant Verified | Result |
+|---|---|---|---|
+| 1 | `test_fresh_speech_result_accepted` | Audio generated for current active version passes Checkpoints 1-3 | **PASSED** |
+| 2 | `test_stale_speech_generation_result_blocked` | Delayed TTS returning after version increment is intercepted at Checkpoint 3 | **PASSED** |
+| 3 | `test_new_interaction_cancels_old_tts_task` | Invalidation listener triggers `TaskManager.cancel_tasks_for_version` | **PASSED** |
+| 4 | `test_uncancellable_old_tts_task_cannot_enqueue_audio` | Uncancellable slow network streams are rejected by version comparison | **PASSED** |
+| 5 | `test_audio_payload_rejected_at_checkpoint_1_if_already_stale` | Outdated requests are dropped before dispatching to provider | **PASSED** |
+| 6 | `test_multiple_rapid_versions_leaves_only_latest_audio_valid` | Sequential requests (v30, v31, v32) leave only v32 eligible | **PASSED** |
+| 7 | `test_tts_failure_does_not_corrupt_form_state` | External 503 error handled gracefully without corrupting form state | **PASSED** |
+| 8 | `test_speech_lifecycle_events_contain_correct_versions` | Structured events in timeline contain monotonic interaction tags | **PASSED** |
+| 9 | `test_conversation_service_triggers_speech_synthesis` | Natural language processing dispatches versioned speech synthesis | **PASSED** |
+| 10 | `test_mode_a_interactive_scenario` | Mode A: v40 slow generation interrupted by v41 -> v40 blocked as stale, active=41 | **PASSED** |
+| 11 | `test_mode_b_interactive_scenario` | Mode B: v50 playing interrupted by v51 -> playback stopped, active=51 | **PASSED** |
+| 12 | `test_mode_c_interactive_scenario` | Mode C: v60, v61, v62 fired rapidly -> only v62 eligible for playback, active=62 | **PASSED** |
 
-### Phase 4 Speech Pipeline Automated Tests (`backend/tests/test_speech_pipeline.py`)
+---
 
-| Test Case | Description | Result |
+## 5. UI Provider Status States
+
+The frontend UI dynamically reflects backend status without hardcoded fallback strings:
+
+| Status Badge | Condition | Visual Indicator |
 |---|---|---|
-| `test_speech_synthesis_happy_path` | Synthesizes response for active version, records lifecycle events, returns audio | **PASSED** |
-| `test_stale_speech_generation_result_blocked` | Delayed TTS returning after version advanced is blocked at Checkpoint 3 | **PASSED** |
-| `test_new_interaction_cancels_old_tts_task` | In-flight cancellable TTS task is aborted upon new user interaction | **PASSED** |
-| `test_uncancellable_old_tts_task_cannot_enqueue_audio` | Uncancellable slow network stream cannot deliver audio to playback | **PASSED** |
-| `test_audio_payload_rejected_at_checkpoint_1_if_already_stale` | Request for obsolete version rejected before calling Rime provider | **PASSED** |
-| `test_multiple_rapid_versions_leaves_only_latest_audio_valid` | Rapid sequence (v30, v31, v32) results in only v32 audio being valid | **PASSED** |
-| `test_tts_failure_does_not_corrupt_form_state` | Provider 503 error handled gracefully without corrupting form state | **PASSED** |
-| `test_speech_lifecycle_events_contain_correct_versions` | Timeline events contain exact interaction & active versions | **PASSED** |
-| `test_conversation_service_triggers_speech_synthesis` | End-to-end conversation flow triggers versioned TTS synthesis | **PASSED** |
+| **Rime Active** | `provider_name === 'Rime'` | Emerald badge with ShieldCheck |
+| **Mock Active** | `provider_name.includes('Mock') && !is_fallback` | Indigo badge with Activity |
+| **Mock Active (Fallback Active)** | `is_fallback === true` | Amber badge with Activity |
+| **Rime Configured** | `rime_configured === true` | Emerald outline badge |
+| **Rime Not Configured** | `rime_configured === false` | Neutral slate outline badge |
 
 ---
 
-## 5. UI & Live Testing Capabilities
+## 6. Known Limitations
 
-The updated UI includes a dedicated **Rime Speech Engine & Version-Tagged Pipeline** panel:
-1. **Live State Badges:** Real-time state indicators (`IDLE`, `GENERATING`, `QUEUED`, `PLAYING`, `INTERRUPTED`, `BLOCKED_STALE`).
-2. **Active vs. Playing Version Counters:** Displays active version alongside currently playing audio version with monotonic guarantee.
-3. **Stale Audio Blocked Counter & Banner:** Displays real-time alert whenever obsolete audio is intercepted.
-4. **Direct Audio Controls:** `Play Test Response (vN)` and `Stop Audio` buttons.
-5. **Interactive Race-Condition Simulators:**
-   - **Mode A (Stale TTS Generation):** Simulates a 2-second delayed TTS request that is superseded by a voice interruption.
-   - **Mode B (Stop Current Playback):** Starts active audio playback and immediately interrupts with a new version, asserting immediate speaker cutoff.
-   - **Mode C (Multiple Rapid Interactions):** Dispatches three simultaneous requests (v60, v61, v62) proving only v62 is eligible for playback.
-
----
-
-## 6. Phase 4 Definition of Done Verification
-
-- [x] **Rime Speech Integration:** `RimeProvider` implemented with proper headers, payload format, and error handling.
-- [x] **5-Checkpoint Version Fencing:** Fences verified at backend dispatch, in-flight cancellation, backend return, frontend queue, and pre-playback.
-- [x] **Authoritative State Intact:** `InteractionVersionManager`, `FormStateManager`, `TaskManager`, `StaleResultGuard`, `ConversationService`, and `ActionValidator` remain authoritative.
-- [x] **Automated Tests:** 9 speech pipeline tests + 28 regression tests passing green.
-- [x] **Frontend Synchronization:** `AudioPlaybackManager` connected to WebSocket and UI controls.
-- [x] **Evidence Document:** Created and committed as `RIME_EVIDENCE.md`.
+1. **Rime API Dependency:** In environments without `RIME_API_KEY`, the application automatically defaults to `MockSpeechProvider` (Fallback Active). Real audio synthesis requires setting `RIME_API_KEY` in environment secrets.
+2. **Network Jitter & Streaming:** Rime HTTP synthesis returns a complete MP3 buffer rather than chunked WebAudio stream. Version fences at Checkpoint 3 and Checkpoint 4 intercept late-arriving buffers cleanly.
+3. **Browser Autoplay Policies:** Browser security requires an initial user interaction (click or keypress) before allowing programmatic audio playback. The `Play Test Response` and `Test Scenarios` buttons provide explicit user activation.

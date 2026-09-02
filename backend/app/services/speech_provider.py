@@ -163,6 +163,9 @@ class MockSpeechProvider(SpeechProvider):
         self.failure_message = failure_message
         self._custom_audio_data = mock_audio_data
         self._forced_responses: Dict[str, Dict[str, Any]] = {}
+        self.model = "mock-tts-v1"
+        self.voice = "mock-voice"
+        self.endpoint = "in-memory-mock"
 
     @property
     def provider_name(self) -> str:

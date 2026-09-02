@@ -132,6 +132,7 @@ export interface SpeechProviderInfo {
   rime_configured: boolean;
   model: string;
   voice: string;
+  endpoint?: string;
 }
 
 export interface SpeechMetrics {

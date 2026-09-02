@@ -51,6 +51,11 @@ export const SpeechStatusPanel: React.FC<SpeechStatusPanelProps> = ({
 }) => {
   const [selectedDelay, setSelectedDelay] = useState<number>(2.0);
 
+  const isRimeActive = providerInfo.provider_name === 'Rime';
+  const isMockActive = providerInfo.provider_name.includes('Mock');
+  const isFallbackActive = providerInfo.is_fallback;
+  const isRimeConfigured = providerInfo.rime_configured;
+
   const getStatusBadge = () => {
     switch (status) {
       case 'PLAYING':
@@ -111,13 +116,51 @@ export const SpeechStatusPanel: React.FC<SpeechStatusPanelProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {getStatusBadge()}
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-            Provider: <strong className="text-indigo-600 dark:text-indigo-400">{providerInfo.provider_name}</strong>
-            {providerInfo.is_fallback && <span className="text-[10px] text-amber-500 font-mono">(Fallback)</span>}
+
+          {/* Provider Active State Badge */}
+          {isRimeActive ? (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" /> Rime Active
+            </span>
+          ) : isFallbackActive ? (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20">
+              <Activity className="w-3.5 h-3.5 text-amber-500" /> Mock Active (Fallback Active)
+            </span>
+          ) : isMockActive ? (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20">
+              <Activity className="w-3.5 h-3.5 text-indigo-500" /> Mock Active
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-500/10 text-slate-700 dark:text-slate-300 border border-slate-500/20">
+              {providerInfo.provider_name}
+            </span>
+          )}
+
+          {/* Rime Credential State Badge */}
+          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border ${
+            isRimeConfigured
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+              : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700'
+          }`}>
+            {isRimeConfigured ? 'Rime Configured' : 'Rime Not Configured'}
           </span>
         </div>
+      </div>
+
+      {/* Backend Provider Config Info Bar */}
+      <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 rounded-lg p-3 text-xs flex flex-wrap items-center justify-between gap-3 font-mono">
+        <div className="flex flex-wrap items-center gap-4 text-slate-600 dark:text-slate-300">
+          <span>Active Provider: <strong className="text-slate-900 dark:text-slate-100">{providerInfo.provider_name}</strong></span>
+          {providerInfo.model && <span>Model: <strong className="text-slate-900 dark:text-slate-100">{providerInfo.model}</strong></span>}
+          {providerInfo.voice && <span>Voice: <strong className="text-slate-900 dark:text-slate-100">{providerInfo.voice}</strong></span>}
+        </div>
+        {providerInfo.endpoint && (
+          <div className="text-[11px] text-slate-400 truncate max-w-xs">
+            {providerInfo.endpoint}
+          </div>
+        )}
       </div>
 
       {/* Stale Audio Blocked Alert */}
