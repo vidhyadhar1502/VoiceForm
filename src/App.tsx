@@ -8,6 +8,7 @@ import { TaskRegistryViewer } from './components/TaskRegistryViewer';
 import { ConversationPanel } from './components/ConversationPanel';
 import { SpeechStatusPanel } from './components/SpeechStatusPanel';
 import { VoiceInteractionPanel } from './components/VoiceInteractionPanel';
+import { HackathonDemoDashboard } from './components/HackathonDemoDashboard';
 import {
   FormState,
   TaskRecord,
@@ -67,6 +68,10 @@ export const App: React.FC = () => {
 
   // Voice Interaction state
   const [voiceState, setVoiceState] = useState<VoiceState>(voiceInteractionManager.getState());
+
+  // Phase 6 Official Hackathon Demo state
+  const [isDemoRunning, setIsDemoRunning] = useState<boolean>(false);
+  const [demoResult, setDemoResult] = useState<any | null>(null);
 
   // Active View Mode
   const [activeTab, setActiveTab] = useState<'conversation' | 'stresstest'>('conversation');
@@ -538,15 +543,133 @@ export const App: React.FC = () => {
     }
   };
 
+  // Phase 6 Official Hackathon Demo Execution
+  const handleRunOfficialDemo = async () => {
+    try {
+      setIsDemoRunning(true);
+      const res = await fetch('/api/demo/hackathon-demo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setDemoResult(data);
+        setActiveVersion(data.final_version);
+        audioPlaybackManager.setActiveVersion(data.final_version);
+        voiceInteractionManager.setActiveVersion(data.final_version);
+        if (data.final_form_state) {
+          setFormState(data.final_form_state);
+        }
+        if (data.timeline) {
+          setTimeline(data.timeline);
+        }
+
+        // Play final confirmed audio response
+        if (data.step_4_final && data.step_4_final.audio_url) {
+          audioPlaybackManager.enqueueAudio({
+            id: `demo_audio_${data.final_version}`,
+            interaction_version: data.final_version,
+            audio_url: data.step_4_final.audio_url,
+            audio_base64: data.step_4_final.audio_base64,
+            format: data.step_4_final.audio_format || 'wav',
+            provider: 'rime',
+          });
+        }
+
+        // Populate conversational history
+        if (data.step_4_final && data.step_4_final.response_text) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `demo_msg_user_1_${Date.now()}`,
+              role: 'user',
+              text: 'My postal code is 600001',
+              interaction_version: data.initial_version,
+              active_version: data.final_version,
+              timestamp: new Date().toISOString(),
+            },
+            {
+              id: `demo_msg_user_2_${Date.now()}`,
+              role: 'user',
+              text: 'Wait no, change my postal code to 600028 immediately!',
+              interaction_version: data.final_version,
+              active_version: data.final_version,
+              timestamp: new Date().toISOString(),
+            },
+            {
+              id: `demo_msg_asst_${Date.now()}`,
+              role: 'assistant',
+              text: data.step_4_final.response_text,
+              interaction_version: data.final_version,
+              active_version: data.final_version,
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to run hackathon demo:', e);
+    } finally {
+      setIsDemoRunning(false);
+      fetchStateSnapshot();
+      fetchSpeechStatus();
+    }
+  };
+
+  // Phase 6 Reset Official Demo
+  const handleResetOfficialDemo = async () => {
+    try {
+      setIsDemoRunning(true);
+      await fetch('/api/demo/reset-demo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initial_version: 100 }),
+      });
+      setActiveVersion(100);
+      audioPlaybackManager.reset(100);
+      voiceInteractionManager.reset(100);
+      setDemoResult(null);
+      setMessages([]);
+      setTimeline([]);
+      setTestSuccess(null);
+      setLastBlockedAudioVersion(null);
+      fetchStateSnapshot();
+      fetchSpeechStatus();
+    } catch (e) {
+      console.error('Failed to reset demo:', e);
+    } finally {
+      setIsDemoRunning(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans">
       <Header
         activeVersion={activeVersion}
         isWsConnected={isWsConnected}
-        isRunning={isRunning || isProcessingAi || isTestingVoice}
+        isRunning={isRunning || isProcessingAi || isTestingVoice || isDemoRunning}
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        {/* Phase 6 Official Hackathon Demo & Subsystem Readiness Dashboard */}
+        <HackathonDemoDashboard
+          activeVersion={activeVersion}
+          formState={formState}
+          voiceState={voiceState}
+          speechStatus={speechStatus}
+          speechMetrics={speechMetrics}
+          onRefreshAll={() => {
+            fetchStateSnapshot();
+            fetchSpeechStatus();
+          }}
+          onResetDemo={handleResetOfficialDemo}
+          onRunOfficialDemo={handleRunOfficialDemo}
+          isDemoRunning={isDemoRunning}
+          demoResult={demoResult}
+        />
+
         {/* Top Metrics Summary */}
         <MetricsCards
           activeVersion={activeVersion}

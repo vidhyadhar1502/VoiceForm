@@ -300,6 +300,11 @@ export class VoiceInteractionManager {
     this.notify();
   }
 
+  public setActiveVersion(version: number) {
+    this.activeVersion = version;
+    this.notify();
+  }
+
   public reset(initialVersion: number = 10) {
     this.cancelInteraction();
     this.activeVersion = initialVersion;

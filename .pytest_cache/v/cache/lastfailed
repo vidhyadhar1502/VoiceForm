@@ -1,1 +1,3 @@
-{}
+{
+  "backend/tests/manual_rime_smoke_test.py": true
+}

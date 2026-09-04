@@ -151,9 +151,18 @@ class RuleBasedFallbackProvider(AIProvider):
             }
 
         # 5. Navigate / Go back
-        if any(p in lower_text for p in ["go back", "navigate to", "jump to", "let's go to", "switch to"]):
+        if any(p in lower_text for p in ["go back", "navigate to", "jump to", "let's go to", "switch to", "go to"]):
             target = None
-            if "name" in lower_text: target = "full_name"
+            if "next" in lower_text:
+                # Find current field index and advance
+                cur_idx = VALID_FIELDS.index(active_field) if active_field in VALID_FIELDS else 0
+                next_idx = min(cur_idx + 1, len(VALID_FIELDS) - 1)
+                target = VALID_FIELDS[next_idx]
+            elif "previous" in lower_text or "prev" in lower_text:
+                cur_idx = VALID_FIELDS.index(active_field) if active_field in VALID_FIELDS else 0
+                prev_idx = max(cur_idx - 1, 0)
+                target = VALID_FIELDS[prev_idx]
+            elif "name" in lower_text: target = "full_name"
             elif "birth" in lower_text or "dob" in lower_text: target = "date_of_birth"
             elif "phone" in lower_text or "mobile" in lower_text: target = "phone_number"
             elif "email" in lower_text: target = "email"
@@ -285,6 +294,18 @@ class RuleBasedFallbackProvider(AIProvider):
                 "value": val,
                 "requires_validation": False,
                 "response_text": f"I've updated your city to {val}."
+            }
+
+        state_match = re.search(r"(?:state is|state to|in the state of|change state to)\s+([A-Za-z\s]+)", clean_text, re.IGNORECASE)
+        if state_match:
+            val = state_match.group(1).strip(" .")
+            action_type = UserIntent.CORRECT_FIELD.value if is_correction else UserIntent.UPDATE_FIELD.value
+            return {
+                "action": action_type,
+                "target_field": "state",
+                "value": val,
+                "requires_validation": False,
+                "response_text": f"I've updated your state to {val}."
             }
 
         # Fallback to active field if plain text provided

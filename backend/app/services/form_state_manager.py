@@ -134,3 +134,13 @@ class FormStateManager:
 
     def reset(self) -> None:
         self._state = FormState.create_initial()
+
+    def get_field_value(self, field_name: str) -> Optional[str]:
+        if field_name in self._state.fields:
+            return self._state.fields[field_name].value
+        return None
+
+    def get_field_status(self, field_name: str) -> Optional[FieldStatus]:
+        if field_name in self._state.fields:
+            return self._state.fields[field_name].status
+        return None

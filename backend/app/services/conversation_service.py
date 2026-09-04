@@ -1,4 +1,5 @@
 import asyncio
+import time
 import uuid
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime
@@ -62,6 +63,15 @@ class ConversationService:
         self.timeline: List[Dict[str, Any]] = timeline_ref if timeline_ref is not None else []
         self.messages: List[ConversationMessage] = []
         self._lock = asyncio.Lock()
+
+        # Phase 6 Telemetry Metrics
+        self.total_voice_inputs: int = 0
+        self.accepted_voice_inputs: int = 0
+        self.voice_interruptions: int = 0
+        self.ai_requests: int = 0
+        self.ai_failures: int = 0
+        self.validation_failures: int = 0
+        self.last_voice_to_response_latency_ms: Optional[float] = None
 
     async def _emit_event(
         self,
@@ -172,6 +182,10 @@ class ConversationService:
                 "interaction_version": self.version_manager.active_version
             }
 
+        input_start_time = time.time()
+        if input_source == "voice":
+            self.total_voice_inputs += 1
+
         # 1. Handle interaction versioning
         if interaction_version is not None and interaction_version == self.version_manager.active_version:
             req_version = interaction_version
@@ -240,6 +254,7 @@ class ConversationService:
         )
 
         ai_task_id = f"ai_task_{req_version}_{uuid.uuid4().hex[:6]}"
+        self.ai_requests += 1
 
         # 5. Call AI Service
         try:
@@ -266,6 +281,12 @@ class ConversationService:
                 "active_version": active_now,
                 "message": f"AI task for version {req_version} was cancelled"
             }
+        except Exception as e:
+            self.ai_failures += 1
+            raise e
+
+        if isinstance(raw_ai_action, dict) and raw_ai_action.get("error"):
+            self.ai_failures += 1
 
         # 6. Version Fence Check 1: Check if newer user input arrived while AI was thinking
         active_after_ai = self.version_manager.active_version
@@ -307,6 +328,7 @@ class ConversationService:
         validated_action = self.action_validator.validate(raw_ai_action, context)
 
         if not validated_action.is_valid:
+            self.validation_failures += 1
             await self._emit_event(
                 event_type="ACTION_REJECTED",
                 interaction_version=req_version,
@@ -478,6 +500,10 @@ class ConversationService:
                 )
             )
 
+        if input_source == "voice":
+            self.accepted_voice_inputs += 1
+            self.last_voice_to_response_latency_ms = round((time.time() - input_start_time) * 1000, 2)
+
         return {
             "success": True,
             "is_stale": False,
@@ -561,5 +587,26 @@ class ConversationService:
     def get_history(self) -> List[Dict[str, Any]]:
         return [m.model_dump() for m in self.messages]
 
+    def record_voice_interruption(self) -> None:
+        self.voice_interruptions += 1
+
+    def get_metrics(self) -> Dict[str, Any]:
+        return {
+            "total_voice_inputs": self.total_voice_inputs,
+            "accepted_voice_inputs": self.accepted_voice_inputs,
+            "voice_interruptions": self.voice_interruptions,
+            "ai_requests": self.ai_requests,
+            "ai_failures": self.ai_failures,
+            "validation_failures": self.validation_failures,
+            "last_voice_to_response_latency_ms": self.last_voice_to_response_latency_ms
+        }
+
     def reset(self) -> None:
         self.messages.clear()
+        self.total_voice_inputs = 0
+        self.accepted_voice_inputs = 0
+        self.voice_interruptions = 0
+        self.ai_requests = 0
+        self.ai_failures = 0
+        self.validation_failures = 0
+        self.last_voice_to_response_latency_ms = None

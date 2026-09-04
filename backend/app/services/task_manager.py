@@ -66,7 +66,7 @@ class TaskManager:
                 return task
         return None
 
-    async def cancel_tasks_for_version(self, version: int) -> List[TaskRecord]:
+    async def cancel_tasks_for_version(self, version: int, reason: Optional[str] = None) -> List[TaskRecord]:
         """
         Attempt to cancel all cancellable running tasks associated with the given version.
         Uncancellable tasks will remain running but will be fenced when they return.
@@ -113,3 +113,6 @@ class TaskManager:
                 handle.cancel()
         self._tasks.clear()
         self._asyncio_handles.clear()
+
+    def clear(self) -> None:
+        self.reset()

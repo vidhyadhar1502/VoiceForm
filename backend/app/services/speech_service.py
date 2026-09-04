@@ -70,6 +70,14 @@ class SpeechService:
             "audio_stop_requests": self.audio_stop_requests
         }
 
+    def reset(self) -> None:
+        self.total_tts_requests = 0
+        self.cancelled_tts_requests = 0
+        self.completed_tts_requests = 0
+        self.stale_tts_results_blocked = 0
+        self.audio_interruptions = 0
+        self.audio_stop_requests = 0
+
     async def _emit_event(
         self,
         event_type: str,
